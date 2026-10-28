@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: BGP address family view (prompt "[~BR-bgp-af-ipv4]"); $af = ipv4 | ipv6.
+CLICON_MODE="vrp-bgp-af";
+CLICON_PROMPT="[~%H-bgp-af]";
+CLICON_PLUGIN="cli_vppcfg";
+
+network("Originate a prefix (installed as a blackhole route and announced where a route-policy permits it)") {
+    <ip:ipv4addr>("IPv4 network address") <len:uint8 range[0:32]>("Mask length"), vc_edit("<routing><bgp><network><prefix>$ip/$len</prefix></network></bgp></routing>");
+    <ip6:ipv6addr>("IPv6 network address") <len6:uint8 range[0:128]>("Prefix length"), vc_edit("<routing><bgp><network><prefix>$ip6/$len6</prefix></network></bgp></routing>");
+}
+peer("Per-family peer settings") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Peer", "/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Peer address or group name")|<peer:string>("Peer address or group name")) {
+    enable("Exchange routes of this family with the peer (default: the family of its address)"), vc_edit("<routing><bgp><PEER><$af><activate>true</activate></$af></PEER></bgp></routing>");
+    route-policy("Apply a route policy; without one nothing is accepted or announced (RFC 8212)") (<rm:string vc_expand_names("/bgp:routing/bgp:route-policy", "name", "Route policy")>("Route policy")|<rm:string>("Route policy name")) {
+        import("Routes received from the peer"), vc_edit("<routing><bgp><PEER><$af><import-policy>$rm</import-policy></$af></PEER></bgp></routing>");
+        export("Routes announced to the peer"), vc_edit("<routing><bgp><PEER><$af><export-policy>$rm</export-policy></$af></PEER></bgp></routing>");
+    }
+    bird-filter("Use a hand-written BIRD filter from bird.conf instead of a route policy") <bf:string regexp:"[A-Za-z][A-Za-z0-9_]*">("BIRD filter name") {
+        import("Routes received from the peer"), vc_edit("<routing><bgp><PEER><$af><import-filter>$bf</import-filter></$af></PEER></bgp></routing>");
+        export("Routes announced to the peer"), vc_edit("<routing><bgp><PEER><$af><export-filter>$bf</export-filter></$af></PEER></bgp></routing>");
+    }
+    route-limit("Restart the session when the peer sends more routes") <max:uint32 range[1:4294967295]>("Maximum number of routes"), vc_edit("<routing><bgp><PEER><$af><max-prefix>$max</max-prefix></$af></PEER></bgp></routing>");
+    next-hop-local("Announce routes with this router as next hop"), vc_edit("<routing><bgp><PEER><$af><next-hop-self>true</next-hop-self></$af></PEER></bgp></routing>");
+}
+undo("Undo a command") {
+    network("Stop originating a prefix") {
+        <ip:ipv4addr>("IPv4 network address") <len:uint8 range[0:32]>("Mask length"), vc_edit("<routing><bgp><network nc:operation='remove'><prefix>$ip/$len</prefix></network></bgp></routing>");
+        <ip6:ipv6addr>("IPv6 network address") <len6:uint8 range[0:128]>("Prefix length"), vc_edit("<routing><bgp><network nc:operation='remove'><prefix>$ip6/$len6</prefix></network></bgp></routing>");
+    }
+    peer("Per-family peer settings") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Peer", "/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Peer address or group name")|<peer:string>("Peer address or group name")) {
+        enable("Do not exchange routes of this family with the peer"), vc_edit("<routing><bgp><PEER><$af><activate>false</activate></$af></PEER></bgp></routing>");
+        route-policy("Remove a route policy") (<rm:string>("Route policy name")) {
+            import("Inbound"), vc_edit("<routing><bgp><PEER><$af><import-policy nc:operation='remove'/></$af></PEER></bgp></routing>");
+            export("Outbound"), vc_edit("<routing><bgp><PEER><$af><export-policy nc:operation='remove'/></$af></PEER></bgp></routing>");
+        }
+        bird-filter("Remove a BIRD filter") {
+            import("Inbound"), vc_edit("<routing><bgp><PEER><$af><import-filter nc:operation='remove'/></$af></PEER></bgp></routing>");
+            export("Outbound"), vc_edit("<routing><bgp><PEER><$af><export-filter nc:operation='remove'/></$af></PEER></bgp></routing>");
+        }
+        route-limit("Remove the route limit"), vc_edit("<routing><bgp><PEER><$af><max-prefix nc:operation='remove'/></$af></PEER></bgp></routing>");
+        next-hop-local("Keep the original next hop"), vc_edit("<routing><bgp><PEER><$af><next-hop-self nc:operation='remove'/></$af></PEER></bgp></routing>");
+    }
+}
+quit("Return to the BGP view"), vc_if_exit("vrp-bgp");

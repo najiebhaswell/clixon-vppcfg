@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Huawei VRP style: display commands, available in all views.
-CLICON_MODE="user:system:vrp-if:vrp-subif:vrp-loop:vrp-trunk";
+CLICON_MODE="user:system:vrp-if:vrp-subif:vrp-loop:vrp-trunk:vrp-bgp:vrp-bgp-af:vrp-rpolicy";
 CLICON_PLUGIN="cli_vppcfg";
 
 display("Display information") {
@@ -22,8 +22,11 @@ display("Display information") {
     }
     eth-trunk("Eth-Trunk members and LACP state"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "bond", "details");
     lcp("linux-cp pairs: VPP interface and its Linux TAP in the dataplane netns"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "lcp");
-    bgp("BGP information (BIRD)") peer("BGP peers: all BIRD protocols with state and uptime"), vc_run("/usr/sbin/birdc", "show", "protocols"); {
-        <peer:string>("Protocol name as shown in 'display bgp peer'") verbose("Full details of one protocol"), vc_run("/usr/sbin/birdc", "show", "protocols", "all", "$peer");
+    bgp("BGP information (BIRD)") {
+        peer("BGP peers: all BIRD protocols with state and uptime"), vc_run("/usr/sbin/birdc", "show", "protocols"); {
+            (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Peer")>("Peer address")|<peer:string>("Peer address or BIRD protocol name")) verbose("Full details of one session"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "bgp-neighbor", "$peer");
+        }
+        routing-table("BGP routes in BIRD") <prefix:string>("Address or prefix: best and alternative routes with attributes"), vc_run("/usr/sbin/birdc", "show", "route", "for", "$prefix", "all");
     }
     version("VPP version and build"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "version");
 }

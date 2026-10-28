@@ -25,7 +25,8 @@ install: all
 	install -d $(DESTDIR)$(LIBDIR)/clispec-vrp
 	rm -f $(DESTDIR)$(LIBDIR)/clispec-vrp/*.cli
 	install -m 644 clispec-vrp/*.cli $(DESTDIR)$(LIBDIR)/clispec-vrp/
-	install -D -m 644 yang/vppcfg@2026-10-28.yang $(DESTDIR)$(PREFIX)/share/clixon-vppcfg/yang/vppcfg@2026-10-28.yang
+	install -d $(DESTDIR)$(PREFIX)/share/clixon-vppcfg/yang
+	install -m 644 yang/*.yang $(DESTDIR)$(PREFIX)/share/clixon-vppcfg/yang/
 	install -D -m 755 helper/clixon-vppcfg $(DESTDIR)$(PREFIX)/libexec/clixon-vppcfg/clixon-vppcfg
 	install -D -m 755 bin/rtr $(DESTDIR)$(PREFIX)/bin/rtr
 	install -D -m 755 bin/vrp $(DESTDIR)$(PREFIX)/bin/vrp

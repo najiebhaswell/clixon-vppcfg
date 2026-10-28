@@ -1,7 +1,8 @@
 # clixon-vppcfg
 
-A Cisco-style and Huawei VRP-style CLI (and NETCONF) for [VPP](https://fd.io/) interface configuration, built with
-[Clixon](https://github.com/clicon/clixon) **on top of [vppcfg](https://git.ipng.ch/ipng/vppcfg)**.
+A Cisco-style and Huawei VRP-style CLI (and NETCONF) for a [VPP](https://fd.io/) + [BIRD](https://bird.network.cz/)
+router: interfaces through **[vppcfg](https://git.ipng.ch/ipng/vppcfg)** and BGP through **BIRD 3**, built with
+[Clixon](https://github.com/clicon/clixon).
 
 Clixon provides the candidate/running datastores, validate, commit, confirmed commit and the CLI.
 vppcfg remains the engine that validates the configuration against the dataplane and applies it to VPP.
@@ -14,13 +15,20 @@ vppcfg remains the engine that validates the configuration against the dataplane
                           ▼
               clixon-vppcfg (Python helper)
                 ├─ validate: XML -> temporary YAML -> vppcfg check + plan
+                │            XML -> bird-clixon.conf (temporary) -> BGP checks + bird -p
                 └─ apply:    /etc/vpp/vppcfg.yaml -> vppcfg apply -> /etc/vpp/config/vppcfg.vpp (boot)
-                          ▼
-                         VPP
+                             /etc/bird/bird-clixon.conf -> birdc configure (only if it changed)
+                          ▼                    ▼
+                         VPP                 BIRD
 ```
 
-- The YANG model (`yang/vppcfg@2026-10-28.yang`) maps 1:1 to the vppcfg 1.2.x schema.
-  Phase 1 covers physical interfaces, sub-interfaces, loopbacks and BondEthernet.
+Interfaces and BGP are one configuration: a single `commit` (or `commit confirmed` / `commit trial`)
+covers both, and a failure in either rolls both back.
+
+- The interface model (`yang/vppcfg@2026-10-28.yang`) maps 1:1 to the vppcfg 1.2.x schema: physical
+  interfaces, sub-interfaces, loopbacks and BondEthernet.
+- The BGP model (`yang/vppcfg-bgp@2026-10-28.yang`) covers router-id, local AS, networks, peers and
+  peer-groups, prefix-lists, community-lists and route-policies (route-maps).
 - `/etc/vpp/vppcfg.yaml` is **generated** on every commit; do not edit it by hand.
 - At VPP start the configuration is still loaded from `/etc/vpp/config/vppcfg.vpp`, so the dataplane
   comes up even if the Clixon backend is not running.
@@ -53,6 +61,14 @@ sudo install -d -m 0750 -g clicon /var/lib/clixon-vppcfg
 # Operators need the clicon (backend socket), vpp (vppctl) and bird (birdc) groups
 sudo usermod -aG clicon,vpp,bird <user>
 sudo systemctl daemon-reload && sudo systemctl enable --now clixon-vppcfg
+```
+
+For BGP, the hand-written `/etc/bird/bird.conf` keeps the base (device, kernel, and any filters you
+write by hand) and includes the generated file as its last line. Remove `router id` from bird.conf;
+it is set with `router-id` (rtr) or `router id` (vrp):
+
+```
+include "/etc/bird/bird-clixon.conf";
 ```
 
 In the VPP startup config use `lcp lcp-auto-subint off`: sub-interface LCPs are managed explicitly
@@ -94,6 +110,49 @@ The interface name selects its type and mode: `loopN` (loopback), `BondEthernetN
 the commands that apply, and `TAB` on `interface` shows each interface's type and description. A physical interface that does not exist in
 VPP is rejected as soon as you type `interface <name>`; loopbacks and bonds may be new, and `TAB`
 suggests the next free `loopN` and `BondEthernetN`.
+
+### BGP
+
+```
+BR(config)# ip prefix-list OWN seq 10 permit 203.0.113.0/24
+BR(config)# route-map TRANSIT-OUT permit 10
+BR(config-route-map)# match ip address prefix-list OWN
+BR(config-route-map)# set as-path prepend 65000 repeat 2
+BR(config-route-map)# exit
+BR(config)# route-map TRANSIT-IN permit 10
+BR(config-route-map)# set local-preference 100
+BR(config-route-map)# exit
+BR(config)# router bgp 65000
+BR(config-router)# bgp router-id 203.0.113.1
+BR(config-router)# network 203.0.113.0/24
+BR(config-router)# neighbor TRANSIT peer-group
+BR(config-router)# neighbor TRANSIT remote-as 64500
+BR(config-router)# neighbor 198.51.100.1 peer-group TRANSIT
+BR(config-router)# address-family ipv4 unicast
+BR(config-router-af)# neighbor TRANSIT route-map TRANSIT-IN in
+BR(config-router-af)# neighbor TRANSIT route-map TRANSIT-OUT out
+BR(config-router-af)# neighbor TRANSIT maximum-prefix 1500000
+BR(config-router-af)# exit-address-family
+BR(config-router)# exit
+BR(config)# commit confirmed 5
+```
+
+The same in `vrp`: `ip ip-prefix OWN index 10 permit 203.0.113.0 24`, `route-policy TRANSIT-OUT permit node 10`
+with `if-match ip-prefix OWN` and `apply as-path 65000 additive 2`, `bgp 65000` with `group TRANSIT external`,
+`peer TRANSIT as-number 64500`, `peer 198.51.100.1 group TRANSIT`, and in `ipv4-family unicast`
+`peer TRANSIT route-policy TRANSIT-IN import`, `peer TRANSIT route-limit 1500000`.
+
+- Peers without a route-map accept and announce nothing (RFC 8212). `neighbor X bird-filter <name> in|out`
+  (`peer X bird-filter <name> import|export`) uses a filter written by hand in bird.conf instead.
+- Neighbor settings override peer-group settings; the merged result is rendered per neighbor
+  (`protocol bgp cx_<address>` in BIRD).
+- `network` prefixes are originated as blackhole static routes (`cx_originate4/6`); they are installed
+  in VPP through the kernel protocol and announced where an export policy permits them.
+- Before anything is applied the candidate is checked for missing route-maps, prefix-lists and
+  peer-groups, missing AS numbers, invalid prefixes and ge/le, then parsed with `bird -p` together
+  with bird.conf. Messages use CLI terms.
+- `show bgp summary`, `show bgp neighbor <address>`, `show ip bgp <prefix>`
+  (`display bgp peer [<address> verbose]`, `display bgp routing-table <prefix>`).
 
 ### Huawei VRP style (`vrp`)
 
@@ -167,7 +226,7 @@ $ vrp
 
 ## Roadmap
 
-- BIRD/BGP model (peers, ASN, prefixes, filters) rendered to `bird.conf`.
+- Static routes, RPKI/ROA, large communities and AS-path regular expressions.
 - `show commit history` and `rollback <n>` from `/var/lib/clixon-vppcfg/history`.
 - Remaining vppcfg sections: bridgedomains, vxlan_tunnels, taps, prefixlists, acls, sflow.
 - RESTCONF and NACM (users/roles).

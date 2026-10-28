@@ -1,12 +1,17 @@
 #!/usr/bin/python3 -I
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Najieb Haswell
-"""clixon-vppcfg: bridge between the Clixon datastore (XML, vppcfg.yang model) and vppcfg.
+"""clixon-vppcfg: bridge between the Clixon datastore (XML, vppcfg.yang and vppcfg-bgp.yang models),
+vppcfg and BIRD.
 
 Called by the backend plugin (validate/apply) and the CLI plugin (show-config/diff/ip-brief).
 
-  clixon-vppcfg validate <cfg.xml>       vppcfg check + plan against the running VPP; errors to stderr
-  clixon-vppcfg apply <cfg.xml>          write /etc/vpp/vppcfg.yaml, vppcfg apply, regenerate the boot file
+  clixon-vppcfg validate <cfg.xml>       vppcfg check + plan against the running VPP, BGP checks and
+                                         'bird -p' on the rendered BIRD configuration; errors to stderr
+  clixon-vppcfg apply <cfg.xml>          write /etc/vpp/vppcfg.yaml, vppcfg apply, regenerate the boot file;
+                                         write /etc/bird/bird-clixon.conf and 'birdc configure' if it changed
+  clixon-vppcfg render-bird <cfg.xml>    print the rendered BIRD configuration (debugging)
+  clixon-vppcfg bgp-neighbor <peer>      'birdc show protocols all' for a neighbor address or protocol name
   clixon-vppcfg import <vppcfg.yaml>     print a Clixon XML datastore from vppcfg.yaml (initial migration)
   clixon-vppcfg render <cfg.xml>         print the rendered YAML (debugging)
   clixon-vppcfg show-config <cfg.xml> [--style cisco|vrp] [--if NAME]
@@ -20,6 +25,7 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
                                          summary of VPP interfaces and their addresses
 """
 import difflib
+import grp
 import ipaddress
 import os
 import re
@@ -41,6 +47,13 @@ BOOT_PATH = "/etc/vpp/config/vppcfg.vpp"
 HISTORY_DIR = "/var/lib/clixon-vppcfg/history"
 HISTORY_KEEP = 100
 VPP_API_SOCK = "/run/vpp/api.sock"
+
+BGP_NS = "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg-bgp"
+BIRD = "/usr/sbin/bird"
+BIRDC = "/usr/sbin/birdc"
+BIRD_CONF = "/etc/bird/bird.conf"
+BIRD_GEN = "/etc/bird/bird-clixon.conf"
+BIRD_INCLUDE = f'include "{BIRD_GEN}";'
 
 INT_LEAVES = {"mtu", "dot1q", "dot1ad", "inner-dot1q"}
 BOOL_LEAVES = {"mpls", "sflow", "exact-match"}
@@ -284,6 +297,13 @@ def cmd_validate(xml_path):
         os.unlink(tmp)
     if err:
         die("vppcfg rejected the configuration:\n" + err)
+    bgp = xml_to_bgp(xml_path)
+    errors = bgp_errors(bgp)
+    if errors:
+        die("BGP configuration is invalid:\n" + "\n".join(errors))
+    err = bird_check(render_bird(bgp))
+    if err:
+        die("BIRD rejected the configuration:\n" + err)
 
 
 def cmd_apply(xml_path):
@@ -310,6 +330,356 @@ def cmd_apply(xml_path):
         for name in hist[:-HISTORY_KEEP]:
             os.unlink(os.path.join(HISTORY_DIR, name))
     subprocess.run(["systemctl", "reload", "govpp-snmp-agentx"], capture_output=True)
+    bgp = xml_to_bgp(xml_path)
+    errors = bgp_errors(bgp)
+    if errors:
+        die("BGP configuration is invalid:\n" + "\n".join(errors))
+    err = bird_apply(render_bird(bgp))
+    if err:
+        die("Failed to apply to BIRD:\n" + err)
+
+
+# ---------------------------------------------------------------------------
+# BGP (vppcfg-bgp.yang) -> BIRD
+# ---------------------------------------------------------------------------
+
+BGP_LISTS = {"network": "prefix", "peer-group": "name", "neighbor": "address", "prefix-list": "name",
+             "entry": "seq", "community-list": "name", "route-policy": "name", "node": "seq"}
+BGP_LEAFLISTS = {"community"}
+BGP_INTS = {"local-as", "remote-as", "multihop", "hold-time", "keepalive", "max-prefix", "seq", "ge", "le",
+            "as-path-contains", "origin-as", "local-preference", "med", "prepend-as", "prepend-count"}
+BGP_BOOLS = {"activate", "next-hop-self", "bfd", "shutdown"}
+PEER_KEYS = ["remote-as", "description", "source-address", "password", "multihop", "bfd", "hold-time",
+             "keepalive", "shutdown"]
+AF_KEYS = ["activate", "import-policy", "export-policy", "import-filter", "export-filter", "max-prefix",
+           "next-hop-self"]
+
+
+def bgp_elem(el):
+    d = {}
+    for c in el:
+        n = local(c.tag)
+        # peer-group, prefix-list and community-list are lists at the top level but also leaves
+        # (references) inside neighbor and match: an element without children is always a leaf.
+        if n in BGP_LISTS and len(c):
+            item = bgp_elem(c)
+            key = item.pop(BGP_LISTS[n])
+            d.setdefault(n, {})[key] = item
+        elif n in BGP_LEAFLISTS:
+            d.setdefault(n, []).append((c.text or "").strip())
+        elif len(c):
+            d[n] = bgp_elem(c)
+        else:
+            t = (c.text or "").strip()
+            d[n] = int(t) if n in BGP_INTS else (t == "true") if n in BGP_BOOLS else t
+    return d
+
+
+def xml_to_bgp(path):
+    root = ET.parse(path).getroot()
+    for el in root.iter(f"{{{BGP_NS}}}routing"):
+        return bgp_elem(el)
+    return {}
+
+
+def is_ip(s):
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
+def effective_peer(bgp, addr):
+    """Neighbor settings merged over its peer-group's settings."""
+    n = bgp.get("neighbor", {}).get(addr, {})
+    g = bgp.get("peer-group", {}).get(n.get("peer-group"), {}) if n.get("peer-group") else {}
+    eff = {k: n.get(k, g.get(k)) for k in PEER_KEYS if k in n or k in g}
+    for af in ("ipv4", "ipv6"):
+        a, b = g.get(af, {}), n.get(af, {})
+        eff[af] = {k: b.get(k, a.get(k)) for k in AF_KEYS if k in a or k in b}
+    return eff
+
+
+def af_active(addr, af, afcfg):
+    default = ipaddress.ip_address(addr).version == (4 if af == "ipv4" else 6)
+    return afcfg.get("activate", default)
+
+
+def bgp_errors(r):
+    """Semantic checks with messages in CLI terms (BIRD's own messages refer to generated names)."""
+    errs = []
+    bgp = r.get("bgp", {})
+    pls, cls, rps = r.get("prefix-list", {}), r.get("community-list", {}), r.get("route-policy", {})
+    if (bgp.get("neighbor") or bgp.get("peer-group") or bgp.get("network")) and "local-as" not in bgp:
+        errs.append("router bgp: the local AS number is not set")
+    for p in bgp.get("network", {}):
+        try:
+            ipaddress.ip_network(p, strict=True)
+        except ValueError as e:
+            errs.append(f"network {p}: {e}")
+    for name, pl in pls.items():
+        for seq, e in pl.get("entry", {}).items():
+            where = f"prefix-list {name} seq {seq}"
+            if "action" not in e or "prefix" not in e:
+                errs.append(f"{where}: permit/deny and a prefix are required")
+                continue
+            try:
+                net = ipaddress.ip_network(e["prefix"], strict=False)
+            except ValueError as ex:
+                errs.append(f"{where}: {ex}")
+                continue
+            ge, le = e.get("ge"), e.get("le")
+            if ge is not None and not net.prefixlen <= ge <= net.max_prefixlen:
+                errs.append(f"{where}: ge {ge} must be between {net.prefixlen} and {net.max_prefixlen}")
+            if le is not None and not net.prefixlen <= le <= net.max_prefixlen:
+                errs.append(f"{where}: le {le} must be between {net.prefixlen} and {net.max_prefixlen}")
+            if ge is not None and le is not None and ge > le:
+                errs.append(f"{where}: ge {ge} is larger than le {le}")
+    for name, rp in rps.items():
+        for seq, node in rp.get("node", {}).items():
+            where = f"route-policy {name} node {seq}"
+            if "action" not in node:
+                errs.append(f"{where}: permit/deny is required")
+            m = node.get("match", {})
+            if "prefix-list" in m and m["prefix-list"] not in pls:
+                errs.append(f"{where}: prefix-list {m['prefix-list']} does not exist")
+            if "community-list" in m and m["community-list"] not in cls:
+                errs.append(f"{where}: community-list {m['community-list']} does not exist")
+            st = node.get("set", {})
+            if ("prepend-count" in st or "prepend-as" in st) and "prepend-as" not in st and "local-as" not in bgp:
+                errs.append(f"{where}: AS-path prepend needs an AS number or the local AS")
+
+    for kind, objs, prefix in (("prefix-list", pls, "cx_pl_"), ("route-policy", rps, "cx_rp_")):
+        seen = {}
+        for name in objs:
+            ident = bird_ident(prefix, name)
+            if ident in seen:
+                errs.append(f"{kind} {name} and {seen[ident]}: names differ only in '-' and '_'")
+            seen[ident] = name
+
+    def check_peer(kind, name, p):
+        for af in ("ipv4", "ipv6"):
+            for d in ("import", "export"):
+                pol = p.get(af, {}).get(f"{d}-policy")
+                if pol and pol not in rps:
+                    errs.append(f"{kind} {name} {af}: route-policy {pol} ({d}) does not exist")
+        if "source-address" in p and not is_ip(p["source-address"]):
+            errs.append(f"{kind} {name}: source address {p['source-address']} is not an IP address")
+
+    for name, g in bgp.get("peer-group", {}).items():
+        check_peer("peer-group", name, g)
+    for addr, n in bgp.get("neighbor", {}).items():
+        if not is_ip(addr):
+            errs.append(f"neighbor {addr}: not an IP address")
+            continue
+        if n.get("peer-group") and n["peer-group"] not in bgp.get("peer-group", {}):
+            errs.append(f"neighbor {addr}: peer-group {n['peer-group']} does not exist")
+        check_peer("neighbor", addr, n)
+        eff = effective_peer(bgp, addr)
+        if "remote-as" not in eff:
+            errs.append(f"neighbor {addr}: remote AS is not set (on the neighbor or its peer-group)")
+        if not any(af_active(addr, af, eff[af]) for af in ("ipv4", "ipv6")):
+            errs.append(f"neighbor {addr}: no address family is activated")
+        if eff.get("bfd") and "multihop" in eff and "source-address" not in eff:
+            errs.append(f"neighbor {addr}: BFD on a multihop session needs a source address "
+                        "(update-source / connect-interface)")
+    return errs
+
+
+def bird_ident(prefix, s):
+    return prefix + re.sub(r"[^A-Za-z0-9]", "_", str(s))
+
+
+def bird_proto(addr):
+    return bird_ident("cx_", addr)
+
+
+def bird_pattern(prefix, ge=None, le=None):
+    net = ipaddress.ip_network(prefix, strict=False)
+    base = f"{net.network_address}/{net.prefixlen}"
+    if ge is None and le is None:
+        return base
+    return f"{base}{{{ge if ge is not None else net.prefixlen},{le if le is not None else net.max_prefixlen}}}"
+
+
+def bird_community(c):
+    a, b = c.split(":")
+    return f"({int(a)},{int(b)})"
+
+
+def render_bird(r):
+    out = ["# /etc/bird/bird-clixon.conf — GENERATED by clixon-vppcfg from the Clixon datastore.",
+           "# Do not edit by hand: changes are overwritten on the next commit.",
+           "# Change BGP with the `rtr` or `vrp` CLI; hand-written configuration stays in bird.conf.", ""]
+    if "router-id" in r:
+        out += [f"router id {r['router-id']};", ""]
+    bgp = r.get("bgp", {})
+    las = bgp.get("local-as")
+    for name, pl in r.get("prefix-list", {}).items():
+        out.append(f"function {bird_ident('cx_pl_', name)}() -> bool {{")
+        for seq in sorted(pl.get("entry", {})):
+            e = pl["entry"][seq]
+            fam = "NET_IP6" if ":" in e["prefix"] else "NET_IP4"
+            ret = "true" if e["action"] == "permit" else "false"
+            out.append(f"  if net.type = {fam} then {{ if net ~ [ {bird_pattern(e['prefix'], e.get('ge'), e.get('le'))} ]"
+                       f" then return {ret}; }}  # seq {seq}")
+        out += ["  return false;", "}", ""]
+    for name, rp in r.get("route-policy", {}).items():
+        out.append(f"filter {bird_ident('cx_rp_', name)} {{")
+        for seq in sorted(rp.get("node", {})):
+            node = rp["node"][seq]
+            m, st = node.get("match", {}), node.get("set", {})
+            conds = []
+            if "prefix-list" in m:
+                conds.append(f"{bird_ident('cx_pl_', m['prefix-list'])}()")
+            if "community-list" in m:
+                comms = r.get("community-list", {}).get(m["community-list"], {}).get("community", [])
+                conds.append(f"bgp_community ~ [ {', '.join(bird_community(c) for c in comms)} ]" if comms else "false")
+            if "as-path-contains" in m:
+                conds.append(f"bgp_path ~ [= * {m['as-path-contains']} * =]")
+            if "origin-as" in m:
+                conds.append(f"bgp_path.last = {m['origin-as']}")
+            body = []
+            if node.get("action") == "permit":
+                if "local-preference" in st:
+                    body.append(f"bgp_local_pref = {st['local-preference']};")
+                if "med" in st:
+                    body.append(f"bgp_med = {st['med']};")
+                for c in st.get("community", []):
+                    body.append(f"bgp_community.add({bird_community(c)});")
+                if "prepend-as" in st or "prepend-count" in st:
+                    body += [f"bgp_path.prepend({st.get('prepend-as', las)});"] * st.get("prepend-count", 1)
+                body.append("accept;")
+            else:
+                body.append("reject;")
+            out.append(f"  # node {seq} {node.get('action')}")
+            if conds:
+                out.append(f"  if {' && '.join(conds)} then {{")
+                out += [f"    {b}" for b in body]
+                out.append("  }")
+            else:
+                out += [f"  {b}" for b in body]
+        out += ["  reject;", "}", ""]
+    nets = list(bgp.get("network", {}))
+    for af, ver in (("ipv4", 4), ("ipv6", 6)):
+        fam = [p for p in nets if ipaddress.ip_network(p).version == ver]
+        if fam:
+            out.append(f"protocol static cx_originate{ver} {{")
+            out.append(f"  {af};")
+            out += [f"  route {p} blackhole;" for p in sorted(fam, key=natural_key)]
+            out += ["}", ""]
+    neighbors = bgp.get("neighbor", {})
+    effs = {a: effective_peer(bgp, a) for a in neighbors}
+    if any(e.get("bfd") for e in effs.values()):
+        out += ["protocol bfd cx_bfd {", "}", ""]
+    for addr in sorted(neighbors, key=lambda a: (ipaddress.ip_address(a).version, ipaddress.ip_address(a))):
+        e = effs[addr]
+        out.append(f"protocol bgp {bird_proto(addr)} {{")
+        if "description" in e:
+            out.append(f'  description "{e["description"]}";')
+        out.append(f"  local as {las};")
+        out.append(f"  neighbor {addr} as {e['remote-as']};")
+        if "source-address" in e:
+            out.append(f"  source address {e['source-address']};")
+        if "password" in e:
+            out.append(f'  password "{e["password"]}";')
+            out.append("  authentication md5;")
+        if "multihop" in e:
+            out.append(f"  multihop {e['multihop']};")
+        if e.get("bfd"):
+            out.append("  bfd on;")
+        if "hold-time" in e:
+            out.append(f"  hold time {e['hold-time']};")
+        if "keepalive" in e:
+            out.append(f"  keepalive time {e['keepalive']};")
+        if e.get("shutdown"):
+            out.append("  disabled;")
+        for af in ("ipv4", "ipv6"):
+            a = e[af]
+            if not af_active(addr, af, a):
+                continue
+            ch = []
+            for d in ("import", "export"):
+                if a.get(f"{d}-filter"):
+                    ch.append(f"{d} filter {a[f'{d}-filter']};")
+                elif a.get(f"{d}-policy"):
+                    ch.append(f"{d} filter {bird_ident('cx_rp_', a[f'{d}-policy'])};")
+                else:
+                    ch.append(f"{d} none;")
+            if "max-prefix" in a:
+                ch.append(f"import limit {a['max-prefix']} action restart;")
+            if a.get("next-hop-self"):
+                ch.append("next hop self;")
+            out.append(f"  {af} {{ {' '.join(ch)} }};")
+        out += ["}", ""]
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def bird_errors(text, gen_path, gen_text):
+    """Turn 'bird: <path>:<line>:<col> <message>' into messages with the generated line as context."""
+    lines = gen_text.splitlines()
+    out = []
+    for line in text.splitlines():
+        m = re.search(re.escape(gen_path) + r":(\d+):\d+:?\s*(.*)", line)
+        if m:
+            n = int(m.group(1))
+            ctx = lines[n - 1].strip() if 0 < n <= len(lines) else ""
+            out.append(f"{m.group(2)} (bird-clixon.conf line {n}: {ctx})")
+        elif "<WARN>" not in line and line.strip():
+            out.append(re.sub(r"^bird: \S+ \S+ \[\d+\] ", "", line.strip()))
+    return "\n".join(out)
+
+
+def bird_check(text):
+    """Parse bird.conf with the candidate bird-clixon.conf ('bird -p'); None if OK."""
+    if not os.path.exists(BIRD_CONF):
+        return None
+    main = open(BIRD_CONF).read()
+    if BIRD_INCLUDE not in main:
+        if text.count("\n") <= 4:
+            return None
+        return f"{BIRD_CONF} does not contain: {BIRD_INCLUDE}"
+    with tempfile.TemporaryDirectory() as d:
+        gen = os.path.join(d, "bird-clixon.conf")
+        with open(gen, "w") as f:
+            f.write(text)
+        conf = os.path.join(d, "bird.conf")
+        with open(conf, "w") as f:
+            f.write(main.replace(BIRD_INCLUDE, f'include "{gen}";'))
+        r = subprocess.run([BIRD, "-p", "-c", conf], capture_output=True, text=True)
+        if r.returncode != 0:
+            return bird_errors(r.stderr + r.stdout, gen, text) or "bird -p failed"
+    return None
+
+
+def bird_apply(text):
+    """Write bird-clixon.conf and reconfigure BIRD if it changed; None if OK."""
+    old = open(BIRD_GEN).read() if os.path.exists(BIRD_GEN) else None
+    if old == text:
+        return None
+    write_atomic(BIRD_GEN, text, 0o640)
+    try:
+        os.chown(BIRD_GEN, 0, grp.getgrnam("bird").gr_gid)
+    except KeyError:
+        pass
+    r = subprocess.run([BIRDC, "configure"], capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    if "Reconfigured" in out or "Reconfiguration in progress" in out:
+        return None
+    if "Unable to connect" in out:
+        print(f"BIRD is not running; {BIRD_GEN} will be loaded when it starts", file=sys.stderr)
+        return None
+    if old is not None:
+        write_atomic(BIRD_GEN, old, 0o640)
+        subprocess.run([BIRDC, "configure"], capture_output=True)
+    return "\n".join(l for l in out.splitlines() if "BIRD" not in l or "ready" not in l).strip() or "birdc configure failed"
+
+
+def cmd_bgp_neighbor(peer):
+    name = bird_proto(peer) if is_ip(peer) else peer
+    r = subprocess.run([BIRDC, "show", "protocols", "all", name], capture_output=True, text=True)
+    sys.stdout.write(r.stdout + r.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -479,12 +849,233 @@ def vrp_lines(cfg, only=None):
     return out
 
 
-def render_lines(cfg, style, only=None):
+def peer_order(bgp):
+    groups = sorted(bgp.get("peer-group", {}), key=natural_key)
+    neighbors = sorted(bgp.get("neighbor", {}),
+                       key=lambda a: (ipaddress.ip_address(a).version, ipaddress.ip_address(a)) if is_ip(a) else (9, a))
+    return groups, neighbors
+
+
+def prefix_list_family(pl):
+    return "ipv6" if any(":" in e.get("prefix", "") for e in pl.get("entry", {}).values()) else "ip"
+
+
+def cisco_bgp_lines(r):
+    out = []
+    bgp = r.get("bgp", {})
+    if bgp or "router-id" in r:
+        if "local-as" in bgp:
+            out.append(f"router bgp {bgp['local-as']}")
+            if "router-id" in r:
+                out.append(f" bgp router-id {r['router-id']}")
+        elif "router-id" in r:
+            out.append(f"router-id {r['router-id']}")
+        groups, neighbors = peer_order(bgp)
+
+        def peer(name, p, group):
+            if group:
+                out.append(f" neighbor {name} peer-group")
+            if "remote-as" in p:
+                out.append(f" neighbor {name} remote-as {p['remote-as']}")
+            if not group and "peer-group" in p:
+                out.append(f" neighbor {name} peer-group {p['peer-group']}")
+            if "description" in p:
+                out.append(f" neighbor {name} description {p['description']}")
+            if "source-address" in p:
+                out.append(f" neighbor {name} update-source {p['source-address']}")
+            if "password" in p:
+                out.append(f" neighbor {name} password {p['password']}")
+            if "multihop" in p:
+                out.append(f" neighbor {name} ebgp-multihop {p['multihop']}")
+            if p.get("bfd"):
+                out.append(f" neighbor {name} fall-over bfd")
+            if "keepalive" in p or "hold-time" in p:
+                out.append(f" neighbor {name} timers {p.get('keepalive', 60)} {p.get('hold-time', 240)}")
+            if p.get("shutdown"):
+                out.append(f" neighbor {name} shutdown")
+
+        for g in groups:
+            peer(g, bgp["peer-group"][g], True)
+        for n in neighbors:
+            peer(n, bgp["neighbor"][n], False)
+        for af, ver in (("ipv4", 4), ("ipv6", 6)):
+            lines = [f"  network {p}" for p in sorted(bgp.get("network", {}), key=natural_key)
+                     if ipaddress.ip_network(p, strict=False).version == ver]
+            for name in groups + neighbors:
+                p = bgp.get("peer-group", {}).get(name) or bgp.get("neighbor", {}).get(name, {})
+                a = p.get(af, {})
+                if "activate" in a:
+                    lines.append(f"  {'' if a['activate'] else 'no '}neighbor {name} activate")
+                for d, kw in (("import", "in"), ("export", "out")):
+                    if f"{d}-policy" in a:
+                        lines.append(f"  neighbor {name} route-map {a[f'{d}-policy']} {kw}")
+                    if f"{d}-filter" in a:
+                        lines.append(f"  neighbor {name} bird-filter {a[f'{d}-filter']} {kw}")
+                if "max-prefix" in a:
+                    lines.append(f"  neighbor {name} maximum-prefix {a['max-prefix']}")
+                if a.get("next-hop-self"):
+                    lines.append(f"  neighbor {name} next-hop-self")
+            if lines:
+                out += [" !", f" address-family {af} unicast"] + lines + [" exit-address-family"]
+        out.append("!")
+    for name, pl in r.get("prefix-list", {}).items():
+        for seq in sorted(pl.get("entry", {})):
+            e = pl["entry"][seq]
+            fam = "ipv6" if ":" in e.get("prefix", "") else "ip"
+            line = f"{fam} prefix-list {name} seq {seq} {e.get('action', '?')} {e.get('prefix', '?')}"
+            line += f" ge {e['ge']}" if "ge" in e else ""
+            line += f" le {e['le']}" if "le" in e else ""
+            out.append(line)
+        out.append("!")
+    for name, cl in r.get("community-list", {}).items():
+        for c in cl.get("community", []):
+            out.append(f"ip community-list {name} permit {c}")
+        out.append("!")
+    for name, rp in r.get("route-policy", {}).items():
+        for seq in sorted(rp.get("node", {})):
+            node = rp["node"][seq]
+            m, st = node.get("match", {}), node.get("set", {})
+            out.append(f"route-map {name} {node.get('action', '?')} {seq}")
+            if "prefix-list" in m:
+                out.append(f" match ip address prefix-list {m['prefix-list']}")
+            if "community-list" in m:
+                out.append(f" match community {m['community-list']}")
+            if "as-path-contains" in m:
+                out.append(f" match as-path contains {m['as-path-contains']}")
+            if "origin-as" in m:
+                out.append(f" match as-path origin {m['origin-as']}")
+            if "local-preference" in st:
+                out.append(f" set local-preference {st['local-preference']}")
+            if "med" in st:
+                out.append(f" set metric {st['med']}")
+            if st.get("community"):
+                out.append(f" set community {' '.join(st['community'])} additive")
+            if "prepend-as" in st or "prepend-count" in st:
+                out.append(f" set as-path prepend {st.get('prepend-as', bgp.get('local-as', '?'))}"
+                           + (f" repeat {st['prepend-count']}" if st.get("prepend-count", 1) > 1 else ""))
+            out.append("!")
+    return out
+
+
+def vrp_bgp_lines(r, section=None):
+    """Huawei VRP rendering; section = None (all), "bgp" or "route-policy:<name>"."""
+    out = []
+    bgp = r.get("bgp", {})
+    if section in (None, "bgp") and (bgp or "router-id" in r):
+        out.append("#")
+        if "local-as" in bgp:
+            out.append(f"bgp {bgp['local-as']}")
+            if "router-id" in r:
+                out.append(f" router-id {r['router-id']}")
+        elif "router-id" in r:
+            out.append(f"router id {r['router-id']}")
+        groups, neighbors = peer_order(bgp)
+
+        def peer(name, p, group):
+            if group:
+                kind = "internal" if p.get("remote-as") and p.get("remote-as") == bgp.get("local-as") else "external"
+                out.append(f" group {name} {kind}")
+            if "remote-as" in p:
+                out.append(f" peer {name} as-number {p['remote-as']}")
+            if not group and "peer-group" in p:
+                out.append(f" peer {name} group {p['peer-group']}")
+            if "description" in p:
+                out.append(f" peer {name} description {p['description']}")
+            if "source-address" in p:
+                out.append(f" peer {name} connect-interface {p['source-address']}")
+            if "password" in p:
+                out.append(f" peer {name} password simple {p['password']}")
+            if "multihop" in p:
+                out.append(f" peer {name} ebgp-max-hop {p['multihop']}")
+            if p.get("bfd"):
+                out.append(f" peer {name} bfd enable")
+            if "keepalive" in p or "hold-time" in p:
+                out.append(f" peer {name} timer keepalive {p.get('keepalive', 60)} hold {p.get('hold-time', 180)}")
+            if p.get("shutdown"):
+                out.append(f" peer {name} ignore")
+
+        for g in groups:
+            peer(g, bgp["peer-group"][g], True)
+        for n in neighbors:
+            peer(n, bgp["neighbor"][n], False)
+        for af, ver in (("ipv4", 4), ("ipv6", 6)):
+            lines = []
+            for p in sorted(bgp.get("network", {}), key=natural_key):
+                net = ipaddress.ip_network(p, strict=False)
+                if net.version == ver:
+                    lines.append(f"  network {net.network_address} {net.prefixlen}")
+            for name in groups + neighbors:
+                p = bgp.get("peer-group", {}).get(name) or bgp.get("neighbor", {}).get(name, {})
+                a = p.get(af, {})
+                if "activate" in a:
+                    lines.append(f"  {'' if a['activate'] else 'undo '}peer {name} enable")
+                for d in ("import", "export"):
+                    if f"{d}-policy" in a:
+                        lines.append(f"  peer {name} route-policy {a[f'{d}-policy']} {d}")
+                    if f"{d}-filter" in a:
+                        lines.append(f"  peer {name} bird-filter {a[f'{d}-filter']} {d}")
+                if "max-prefix" in a:
+                    lines.append(f"  peer {name} route-limit {a['max-prefix']}")
+                if a.get("next-hop-self"):
+                    lines.append(f"  peer {name} next-hop-local")
+            if lines:
+                out += [" #", f" {af}-family unicast"] + lines
+    if section is None:
+        for name, pl in r.get("prefix-list", {}).items():
+            out.append("#")
+            for seq in sorted(pl.get("entry", {})):
+                e = pl["entry"][seq]
+                net = ipaddress.ip_network(e.get("prefix", "0.0.0.0/0"), strict=False)
+                kw = "ipv6-prefix" if net.version == 6 else "ip-prefix"
+                line = f"ip {kw} {name} index {seq} {e.get('action', '?')} {net.network_address} {net.prefixlen}"
+                line += f" greater-equal {e['ge']}" if "ge" in e else ""
+                line += f" less-equal {e['le']}" if "le" in e else ""
+                out.append(line)
+        for name, cl in r.get("community-list", {}).items():
+            out.append("#")
+            out += [f"ip community-filter basic {name} permit {c}" for c in cl.get("community", [])]
+    for name, rp in r.get("route-policy", {}).items():
+        if section not in (None, f"route-policy:{name}"):
+            continue
+        for seq in sorted(rp.get("node", {})):
+            node = rp["node"][seq]
+            m, st = node.get("match", {}), node.get("set", {})
+            out += ["#", f"route-policy {name} {node.get('action', '?')} node {seq}"]
+            if "prefix-list" in m:
+                out.append(f" if-match ip-prefix {m['prefix-list']}")
+            if "community-list" in m:
+                out.append(f" if-match community-filter {m['community-list']}")
+            if "as-path-contains" in m:
+                out.append(f" if-match as-path contains {m['as-path-contains']}")
+            if "origin-as" in m:
+                out.append(f" if-match as-path origin {m['origin-as']}")
+            if "local-preference" in st:
+                out.append(f" apply local-preference {st['local-preference']}")
+            if "med" in st:
+                out.append(f" apply cost {st['med']}")
+            for c in st.get("community", []):
+                out.append(f" apply community {c} additive")
+            if "prepend-as" in st or "prepend-count" in st:
+                out.append(f" apply as-path {st.get('prepend-as', bgp.get('local-as', '?'))} additive"
+                           + (f" {st['prepend-count']}" if st.get("prepend-count", 1) > 1 else ""))
+    return out
+
+
+def render_lines(cfg, style, only=None, bgp=None):
+    bgp = bgp or {}
     if style == "vrp":
-        return vrp_lines(cfg, only)
+        if only in ("bgp",) or (only or "").startswith("route-policy:"):
+            lines = vrp_bgp_lines(bgp, only)
+            return lines + ["#", "return"] if lines else []
+        lines = vrp_lines(cfg, only)
+        if only is None:
+            lines = lines[:-2] + vrp_bgp_lines(bgp) + ["#", "return"]
+        return lines
+    if only == "bgp" or (only or "").startswith("route-policy:"):
+        return cisco_bgp_lines(bgp)
     lines = cisco_lines(cfg)
     if only is None:
-        return lines
+        return lines + cisco_bgp_lines(bgp)
     # Cisco: keep the block of one interface
     out, keep = [], False
     for line in lines:
@@ -496,14 +1087,14 @@ def render_lines(cfg, style, only=None):
 
 
 def cmd_show_config(xml_path, style="cisco", only=None):
-    lines = render_lines(xml_to_cfg(xml_path), style, only)
-    empty = "# (no interface configuration)" if style == "vrp" else "! (no interface configuration)"
+    lines = render_lines(xml_to_cfg(xml_path), style, only, xml_to_bgp(xml_path))
+    empty = "# (no configuration)" if style == "vrp" else "! (no configuration)"
     print("\n".join(lines) if lines else empty)
 
 
 def cmd_diff(a_path, b_path, style="cisco"):
-    a = render_lines(xml_to_cfg(a_path), style)
-    b = render_lines(xml_to_cfg(b_path), style)
+    a = render_lines(xml_to_cfg(a_path), style, None, xml_to_bgp(a_path))
+    b = render_lines(xml_to_cfg(b_path), style, None, xml_to_bgp(b_path))
     diff = list(difflib.unified_diff(a, b, "running", "candidate", lineterm="", n=2))
     none = "Info: No uncommitted configuration." if style == "vrp" else "% No uncommitted changes."
     print("\n".join(diff[2:]) if diff else none)
@@ -511,7 +1102,8 @@ def cmd_diff(a_path, b_path, style="cisco"):
 
 def cmd_changed(a_path, b_path):
     """Exit 1 if configurations a and b differ, 0 if identical."""
-    sys.exit(1 if xml_to_cfg(a_path) != xml_to_cfg(b_path) else 0)
+    same = xml_to_cfg(a_path) == xml_to_cfg(b_path) and xml_to_bgp(a_path) == xml_to_bgp(b_path)
+    sys.exit(0 if same else 1)
 
 
 def vrp_rename_output(text):
@@ -586,6 +1178,10 @@ def main():
         if unsupported:
             die("vppcfg.yaml sections not yet supported by the phase 1 YANG model: " + ", ".join(sorted(unsupported)))
         sys.stdout.write(cfg_to_xml(cfg))
+    elif verb == "render-bird" and len(args) == 1:
+        sys.stdout.write(render_bird(xml_to_bgp(args[0])))
+    elif verb == "bgp-neighbor" and len(args) == 1:
+        cmd_bgp_neighbor(args[0])
     elif verb == "render" and len(args) == 1:
         sys.stdout.write(render_yaml(xml_to_cfg(args[0])))
     elif verb == "show-config" and len(args) == 1:

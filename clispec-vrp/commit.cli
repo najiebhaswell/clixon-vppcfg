@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Huawei VRP style: two-stage commit, available in the system and interface views.
-CLICON_MODE="system:vrp-if:vrp-subif:vrp-loop:vrp-trunk";
+CLICON_MODE="system:vrp-if:vrp-subif:vrp-loop:vrp-trunk:vrp-bgp:vrp-bgp-af:vrp-rpolicy";
 CLICON_PLUGIN="cli_vppcfg";
 
 commit("Commit the candidate: validate with vppcfg and apply to VPP; the result survives reboots"), vc_commit(); {

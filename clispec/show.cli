@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Show commands, available in all modes.
-CLICON_MODE="exec:configure:configure-if:configure-subif:configure-loop:configure-bond";
+CLICON_MODE="exec:configure:configure-if:configure-subif:configure-loop:configure-bond:configure-router:configure-router-af:configure-rmap";
 CLICON_PLUGIN="cli_vppcfg";
 
 show("Show operational state and configuration") {
@@ -11,6 +11,7 @@ show("Show operational state and configuration") {
     hardware("NIC details: link speed, queues, driver and error counters") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "hardware-interfaces", "$ifname");
     ip("IPv4 information") {
         interface("Interface information") brief("Interfaces with admin state and IPv4/IPv6 addresses"), vc_ip_brief();
+        bgp("BGP routes in BIRD") <prefix:string>("Address or prefix: best and alternative routes with attributes"), vc_run("/usr/sbin/birdc", "show", "route", "for", "$prefix", "all");
         route("IPv4 forwarding table (VPP FIB)") {
             summary("Number of IPv4 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "summary");
             <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "$prefix");
@@ -24,7 +25,7 @@ show("Show operational state and configuration") {
     bond("Bond members and LACP state"), vc_run("/usr/bin/vppctl", "show", "bond", "details");
     bgp("BGP sessions (BIRD)") {
         summary("All BIRD protocols with state and uptime"), vc_run("/usr/sbin/birdc", "show", "protocols");
-        neighbor("Full details of one BIRD protocol") <peer:string>("Protocol name as shown in 'show bgp summary'"), vc_run("/usr/sbin/birdc", "show", "protocols", "all", "$peer");
+        neighbor("Full details of one session") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Neighbor")>("Neighbor address")|<peer:string>("Neighbor address or BIRD protocol name")), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "bgp-neighbor", "$peer");
     }
     version("VPP version and build"), vc_run("/usr/bin/vppctl", "show", "version");
 }

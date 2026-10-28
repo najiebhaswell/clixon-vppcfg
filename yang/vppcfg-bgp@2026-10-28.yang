@@ -1,0 +1,202 @@
+module vppcfg-bgp {
+    yang-version 1.1;
+    namespace "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg-bgp";
+    prefix bgp;
+
+    organization "clixon-vppcfg";
+    contact "https://github.com/najiebhaswell/clixon-vppcfg";
+    description
+        "BGP configuration for BIRD 3. Every Clixon commit renders this model to
+         /etc/bird/bird-clixon.conf (included from the hand-written bird.conf),
+         validates it with 'bird -p' and applies it with 'birdc configure'.
+
+         Peers without a policy accept and announce nothing (RFC 8212).
+         Hand-written BIRD filters can be referenced by name with
+         import-filter/export-filter.
+
+         Copyright 2026 Najieb Haswell. Licensed under the Apache License, Version 2.0.";
+
+    revision 2026-10-28 {
+        description "Phase 2: router-id, BGP peers and peer-groups, networks, prefix-lists,
+                     community-lists, route-policies.";
+    }
+
+    typedef asn {
+        type uint32 {
+            range "1..4294967295";
+        }
+    }
+    typedef ip-address {
+        type string {
+            pattern '[0-9.]+|[0-9a-fA-F:.]+';
+        }
+        description "IPv4 or IPv6 address (checked in full by the helper).";
+    }
+    typedef ip-prefix {
+        type string {
+            pattern '[0-9.]+/[0-9]{1,2}|[0-9a-fA-F:.]+/[0-9]{1,3}';
+        }
+    }
+    typedef object-name {
+        type string {
+            length "1..48";
+            pattern '[A-Za-z][A-Za-z0-9_-]*';
+        }
+    }
+    typedef community {
+        type string {
+            pattern '[0-9]{1,5}:[0-9]{1,5}';
+        }
+        description "Standard community ASN:value.";
+    }
+    typedef action {
+        type enumeration {
+            enum permit;
+            enum deny;
+        }
+    }
+
+    grouping af-settings {
+        leaf activate {
+            type boolean;
+            description "Exchange routes of this family. Default: true for the family of the
+                         neighbor address, false otherwise.";
+        }
+        leaf import-policy { type object-name; description "route-policy for received routes."; }
+        leaf export-policy { type object-name; description "route-policy for announced routes."; }
+        leaf import-filter { type object-name; description "Hand-written BIRD filter; overrides import-policy."; }
+        leaf export-filter { type object-name; description "Hand-written BIRD filter; overrides export-policy."; }
+        leaf max-prefix {
+            type uint32 {
+                range "1..4294967295";
+            }
+            description "Restart the session when more routes are received.";
+        }
+        leaf next-hop-self { type boolean; }
+    }
+
+    grouping peer-settings {
+        leaf remote-as { type asn; }
+        leaf description {
+            type string {
+                length "1..80";
+                pattern '[^"]*';
+            }
+        }
+        leaf source-address { type ip-address; }
+        leaf password {
+            type string {
+                length "1..80";
+                pattern '[^"]*';
+            }
+            description "TCP MD5 password.";
+        }
+        leaf multihop {
+            type uint8 {
+                range "1..255";
+            }
+        }
+        leaf bfd { type boolean; }
+        leaf hold-time {
+            type uint16 {
+                range "3..65535";
+            }
+        }
+        leaf keepalive {
+            type uint16 {
+                range "1..65535";
+            }
+        }
+        leaf shutdown { type boolean; }
+        container ipv4 { uses af-settings; }
+        container ipv6 { uses af-settings; }
+    }
+
+    container routing {
+        leaf router-id {
+            type string {
+                pattern '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+';
+            }
+        }
+        container bgp {
+            leaf local-as { type asn; }
+            list network {
+                key prefix;
+                leaf prefix { type ip-prefix; }
+                description "Own prefixes, originated as static blackhole routes.";
+            }
+            list peer-group {
+                key name;
+                leaf name { type object-name; }
+                uses peer-settings;
+            }
+            list neighbor {
+                key address;
+                leaf address { type ip-address; }
+                leaf peer-group { type object-name; }
+                uses peer-settings;
+            }
+        }
+        list prefix-list {
+            key name;
+            leaf name { type object-name; }
+            list entry {
+                key seq;
+                leaf seq {
+                    type uint32 {
+                        range "1..4294967295";
+                    }
+                }
+                leaf action { type action; }
+                leaf prefix { type ip-prefix; }
+                leaf ge {
+                    type uint8 {
+                        range "1..128";
+                    }
+                }
+                leaf le {
+                    type uint8 {
+                        range "1..128";
+                    }
+                }
+            }
+        }
+        list community-list {
+            key name;
+            leaf name { type object-name; }
+            leaf-list community {
+                type community;
+            }
+        }
+        list route-policy {
+            key name;
+            leaf name { type object-name; }
+            list node {
+                key seq;
+                leaf seq {
+                    type uint32 {
+                        range "1..4294967295";
+                    }
+                }
+                leaf action { type action; }
+                container match {
+                    leaf prefix-list { type object-name; }
+                    leaf community-list { type object-name; }
+                    leaf as-path-contains { type asn; }
+                    leaf origin-as { type asn; }
+                }
+                container set {
+                    leaf local-preference { type uint32; }
+                    leaf med { type uint32; }
+                    leaf-list community { type community; }
+                    leaf prepend-as { type asn; }
+                    leaf prepend-count {
+                        type uint8 {
+                            range "1..10";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

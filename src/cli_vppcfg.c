@@ -34,6 +34,7 @@
 #include <clixon/clixon_cli.h>
 
 #define NS      "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg"
+#define NS_BGP  "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg-bgp"
 #define NC_NS   "urn:ietf:params:xml:ns:netconf:base:1.0"
 #define HELPER  "/usr/local/libexec/clixon-vppcfg/clixon-vppcfg"
 #define VPPCTL  "/usr/bin/vppctl"
@@ -42,6 +43,7 @@ enum iftype { IF_PHY, IF_SUB, IF_LOOP, IF_BOND };
 
 static char _ifname[64]; /* current interface (VPP name) in the interface configuration modes */
 static int  _vrp;        /* 1 when this CLI session uses the Huawei VRP style */
+static cvec *_ctx;       /* BGP mode context: af, rp (route-policy), rseq (node) */
 
 static int
 all_digits(const char *s)
@@ -115,6 +117,8 @@ fix_case(char *name)
     }
     cvec_free(names);
 }
+
+static void add_completion(cvec *commands, cvec *helptexts, const char *name, const char *help);
 
 /*! Map a VRP alias to the VPP name: Eth-TrunkN -> BondEthernetN, LoopBackN -> loopN
  * (case-insensitive, keeps a ".N" sub-interface suffix); other names keep their VPP spelling. */
@@ -909,6 +913,213 @@ vc_if_exit(clixon_handle h,
     return cli_set_syntax_mode(h, (char *)target) < 0 ? -1 : 0;
 }
 
+/*! Value of $name for templates: CLI variable first, then the mode context. malloc'ed or NULL. */
+static char *
+tpl_value(cvec       *cvv,
+          const char *name)
+{
+    cg_var *cv;
+
+    if ((cv = cvec_find(cvv, name)) != NULL)
+        return cv2str_dup(cv);
+    if (_ctx != NULL && (cv = cvec_find(_ctx, name)) != NULL)
+        return strdup(cv_string_get(cv));
+    return NULL;
+}
+
+/*! Expand template text into out: "$name" is replaced by the XML-escaped value; text inside
+ * "[...]" is dropped when a variable in it is missing. @retval 0 OK, -1 missing variable (name set) */
+static int
+tpl_expand(cvec       *cvv,
+           const char *t,
+           size_t      n,
+           cbuf       *out,
+           char       *missing,
+           size_t      mlen)
+{
+    size_t i = 0;
+    size_t j;
+    char   name[64];
+    char  *v;
+    cbuf  *opt;
+
+    while (i < n) {
+        if (t[i] == '[') {
+            for (j = i + 1; j < n && t[j] != ']'; j++)
+                ;
+            opt = cbuf_new();
+            if (tpl_expand(cvv, t + i + 1, j - i - 1, opt, missing, mlen) == 0)
+                cprintf(out, "%s", cbuf_get(opt));
+            cbuf_free(opt);
+            i = j + 1;
+        }
+        else if (t[i] == '$') {
+            for (j = i + 1; j < n && j - i - 1 < sizeof(name) - 1 && (isalnum((unsigned char)t[j]) || t[j] == '_'); j++)
+                name[j - i - 1] = t[j];
+            name[j - i - 1] = '\0';
+            if ((v = tpl_value(cvv, name)) == NULL) {
+                snprintf(missing, mlen, "%s", name);
+                return -1;
+            }
+            xesc(out, v);
+            free(v);
+            i = j;
+        }
+        else
+            cprintf(out, "%c", t[i++]);
+    }
+    return 0;
+}
+
+/*! Apply a configuration template from a clispec to the candidate (edit-config merge).
+ * <PEER ...>...</PEER> becomes <neighbor><address>$peer</address>...</neighbor> when $peer is an IP
+ * address, otherwise <peer-group><name>$peer</name>...</peer-group>. The xmlns of the module (ns)
+ * is added to the first element. */
+static int
+tpl_edit(clixon_handle h,
+         cvec         *cvv,
+         const char   *tpl,
+         const char   *ns)
+{
+    cbuf       *pre = cbuf_new();
+    cbuf       *body = cbuf_new();
+    cbuf       *cb = cbuf_new();
+    char       *peer = tpl_value(cvv, "peer");
+    int         isip = 0;
+    const char *p;
+    const char *gt;
+    char        missing[64] = "";
+    int         ret = -1;
+
+    if (peer != NULL) {
+        struct in6_addr a6;
+        struct in_addr  a4;
+        isip = inet_pton(AF_INET, peer, &a4) == 1 || inet_pton(AF_INET6, peer, &a6) == 1;
+    }
+    /* Rewrite PEER tags */
+    for (p = tpl; *p; ) {
+        if (strncmp(p, "<PEER", 5) == 0 && (gt = strchr(p, '>')) != NULL) {
+            cprintf(pre, "<%s%.*s>%s", isip ? "neighbor" : "peer-group", (int)(gt - p - 5), p + 5,
+                    isip ? "<address>$peer</address>" : "<name>$peer</name>");
+            p = gt + 1;
+        }
+        else if (strncmp(p, "</PEER>", 7) == 0) {
+            cprintf(pre, "</%s>", isip ? "neighbor" : "peer-group");
+            p += 7;
+        }
+        else
+            cprintf(pre, "%c", *p++);
+    }
+    if (tpl_expand(cvv, cbuf_get(pre), strlen(cbuf_get(pre)), body, missing, sizeof(missing)) < 0) {
+        user_error("Missing value for %s", missing);
+        ret = 0;
+        goto done;
+    }
+    /* Add the module namespace to the first element */
+    p = cbuf_get(body);
+    if (*p != '<') {
+        clixon_err(OE_PLUGIN, EINVAL, "Template must start with an element: %s", tpl);
+        goto done;
+    }
+    gt = p + 1;
+    while (*gt && *gt != '>' && *gt != ' ' && *gt != '/')
+        gt++;
+    cprintf(cb, "<config xmlns:nc=\"%s\">%.*s xmlns=\"%s\"%s</config>", NC_NS, (int)(gt - p), p, ns, gt);
+    ret = clicon_rpc_edit_config(h, "candidate", OP_MERGE, cbuf_get(cb)) < 0 ? -1 : 0;
+ done:
+    free(peer);
+    cbuf_free(pre);
+    cbuf_free(body);
+    cbuf_free(cb);
+    return ret;
+}
+
+/* Generic configuration command: argv = (template). Used by the BGP, prefix-list and route-policy
+ * commands; see tpl_edit() for the template syntax. */
+int
+vc_edit(clixon_handle h,
+        cvec         *cvv,
+        cvec         *argv)
+{
+    return tpl_edit(h, cvv, arg_str(argv, 0), NS_BGP);
+}
+
+/* Enter a BGP or route-policy mode: argv = (mode, template or "-", "key=$var" | "key=literal"...).
+ * The key/value pairs become the mode context used by later templates ($af, $rp, $rseq).
+ * CLIgen drops empty "" arguments, so "-" means "no template"; an argument that does not start
+ * with '<' is always taken as a key=value pair. */
+int
+vc_enter(clixon_handle h,
+         cvec         *cvv,
+         cvec         *argv)
+{
+    const char *mode = arg_str(argv, 0);
+    const char *tpl = arg_str(argv, 1);
+    const char *kv;
+    const char *eq;
+    char        key[32];
+    char       *val;
+    cg_var     *cv;
+    int         i;
+
+    if (_ctx == NULL)
+        _ctx = cvec_new(0);
+    if (tpl != NULL && tpl[0] != '<')
+        tpl = NULL;
+    for (i = tpl ? 2 : 1; i < cvec_len(argv); i++) {
+        kv = arg_str(argv, i);
+        if ((eq = strchr(kv, '=')) == NULL)
+            continue;
+        snprintf(key, sizeof(key), "%.*s", (int)(eq - kv), kv);
+        val = eq[1] == '$' ? tpl_value(cvv, eq + 2) : strdup(eq + 1);
+        if (val == NULL)
+            return user_error("Missing value for %s", eq + 2);
+        if ((cv = cvec_find(_ctx, key)) != NULL)
+            cv_string_set(cv, val);
+        else
+            cvec_add_string(_ctx, key, val);
+        free(val);
+    }
+    if (tpl != NULL && tpl_edit(h, cvv, tpl, NS_BGP) < 0)
+        return -1;
+    return cli_set_syntax_mode(h, (char *)mode) < 0 ? -1 : 0;
+}
+
+/*! Tab completion of BGP object names from the candidate: argv = (xpath, key leaf, help) triples,
+ * e.g. ("/bgp:routing/bgp:prefix-list", "name", "Prefix list"). */
+int
+vc_expand_names(clixon_handle h,
+                char         *name,
+                cvec         *cvv,
+                cvec         *argv,
+                cvec         *commands,
+                cvec         *helptexts)
+{
+    cxobj  *xt = NULL;
+    cxobj **vec = NULL;
+    cvec   *nsc;
+    size_t  len;
+    size_t  i;
+    int     a;
+    char   *key;
+
+    if (clicon_rpc_get_config(h, NULL, "candidate", "/", NULL, NULL, &xt) < 0 || xt == NULL)
+        return 0;
+    nsc = xml_nsctx_init("bgp", NS_BGP);
+    for (a = 0; a + 1 < cvec_len(argv); a += 3) {
+        if (xpath_vec(xt, nsc, "%s", &vec, &len, arg_str(argv, a)) < 0)
+            continue;
+        for (i = 0; i < len; i++)
+            if ((key = xml_find_body(vec[i], arg_str(argv, a + 1))) != NULL)
+                add_completion(commands, helptexts, key, arg_str(argv, a + 2) ? arg_str(argv, a + 2) : "");
+        free(vec);
+        vec = NULL;
+    }
+    cvec_free(nsc);
+    xml_free(xt);
+    return 0;
+}
+
 /*! Prefix length from a dotted netmask, -1 if not a contiguous mask. */
 static int
 mask_to_len(const char *mask)
@@ -1046,10 +1257,19 @@ vc_display_this(clixon_handle h,
                 cvec         *cvv,
                 cvec         *argv)
 {
-    char  path[] = "/tmp/rtr-this-XXXXXX";
-    char *args[] = {HELPER, "show-config", path, "--style", style_arg(argv, 0), "--if", _ifname, NULL};
+    char        path[] = "/tmp/rtr-this-XXXXXX";
+    char        section[96];
+    char       *args[] = {HELPER, "show-config", path, "--style", style_arg(argv, 0), "--if", _ifname, NULL};
+    const char *mode = cli_syntax_mode(h);
+    cg_var     *rp;
 
-    if (_ifname[0] == '\0')
+    if (mode != NULL && (strcmp(mode, "vrp-bgp") == 0 || strcmp(mode, "vrp-bgp-af") == 0))
+        args[6] = "bgp";
+    else if (mode != NULL && strcmp(mode, "vrp-rpolicy") == 0 && _ctx && (rp = cvec_find(_ctx, "rp"))) {
+        snprintf(section, sizeof(section), "route-policy:%s", cv_string_get(rp));
+        args[6] = section;
+    }
+    else if (_ifname[0] == '\0')
         args[5] = NULL;
     if (dump_db(h, "candidate", path) < 0)
         return -1;
@@ -1100,6 +1320,14 @@ vc_prompt(clixon_handle h,
     mark = dbs_differ(h) == 1 ? '*' : '~';
     if (strcmp(mode, "system") == 0)
         snprintf(buf, sizeof(buf), "[%c%%H]", mark);
+    else if (strcmp(mode, "vrp-bgp") == 0)
+        snprintf(buf, sizeof(buf), "[%c%%H-bgp]", mark);
+    else if (strcmp(mode, "vrp-bgp-af") == 0) {
+        cg_var *af = _ctx ? cvec_find(_ctx, "af") : NULL;
+        snprintf(buf, sizeof(buf), "[%c%%H-bgp-af-%s]", mark, af ? cv_string_get(af) : "?");
+    }
+    else if (strcmp(mode, "vrp-rpolicy") == 0)
+        snprintf(buf, sizeof(buf), "[%c%%H-route-policy]", mark);
     else {
         vrp_ifname(_ifname, name, sizeof(name));
         snprintf(buf, sizeof(buf), "[%c%%H-%s]", mark, name);

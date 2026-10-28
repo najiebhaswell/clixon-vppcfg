@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: route-policy node view; context $rp = name, $rseq = node.
+CLICON_MODE="vrp-rpolicy";
+CLICON_PROMPT="[~%H-route-policy]";
+CLICON_PLUGIN="cli_vppcfg";
+
+if-match("Conditions; all must be true for this node to apply") {
+    ip-prefix("Match an IPv4 prefix list") (<pl:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "IP prefix list")>("IP prefix list")|<pl:string>("IP prefix list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list>$pl</prefix-list></match></node></route-policy></routing>");
+    ipv6("IPv6") address("Destination prefix") prefix-list("Match an IPv6 prefix list") (<pl:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "IP prefix list")>("IP prefix list")|<pl:string>("IP prefix list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list>$pl</prefix-list></match></node></route-policy></routing>");
+    community-filter("Route carries any community of a community filter") (<cl:string vc_expand_names("/bgp:routing/bgp:community-list", "name", "Community filter")>("Community filter")|<cl:string>("Community filter name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><community-list>$cl</community-list></match></node></route-policy></routing>");
+    as-path("AS path") {
+        contains("AS path contains this AS") <asn:uint32 range[1:4294967295]>("AS number"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><as-path-contains>$asn</as-path-contains></match></node></route-policy></routing>");
+        origin("Route originated by this AS (last AS in the path)") <asn:uint32 range[1:4294967295]>("AS number"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><origin-as>$asn</origin-as></match></node></route-policy></routing>");
+    }
+}
+apply("Actions applied when this node permits a route") {
+    local-preference("BGP local preference (higher is preferred, default 100)") <lp:uint32>("Local preference"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><local-preference>$lp</local-preference></set></node></route-policy></routing>");
+    cost("MED announced to the peer (lower is preferred)") <med:uint32>("MED"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med>$med</med></set></node></route-policy></routing>");
+    community("Add a community; repeat for more") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community AA:NN, e.g. 65000:100") additive("Keep existing communities"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community>$comm</community></set></node></route-policy></routing>");
+    as-path("AS path") <asn:uint32 range[1:4294967295]>("AS number to prepend, usually the local AS") additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as>$asn</prepend-as><prepend-count nc:operation='remove'/></set></node></route-policy></routing>"); {
+        <count:uint8 range[1:10]>("Number of times, 1-10"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as>$asn</prepend-as><prepend-count>$count</prepend-count></set></node></route-policy></routing>");
+    }
+}
+undo("Undo a command") {
+    if-match("Remove a condition") {
+        ip-prefix("Remove the IPv4 prefix list condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list nc:operation='remove'/></match></node></route-policy></routing>");
+        ipv6("IPv6") address("Destination prefix") prefix-list("Remove the IPv6 prefix list condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list nc:operation='remove'/></match></node></route-policy></routing>");
+        community-filter("Remove the community condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><community-list nc:operation='remove'/></match></node></route-policy></routing>");
+        as-path("AS path") {
+            contains("Remove the AS-path condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><as-path-contains nc:operation='remove'/></match></node></route-policy></routing>");
+            origin("Remove the origin-AS condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><origin-as nc:operation='remove'/></match></node></route-policy></routing>");
+        }
+    }
+    apply("Remove an action") {
+        local-preference("Remove the local preference action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><local-preference nc:operation='remove'/></set></node></route-policy></routing>");
+        cost("Remove the MED action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med nc:operation='remove'/></set></node></route-policy></routing>");
+        community("Remove a community") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community AA:NN, e.g. 65000:100"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community nc:operation='remove'>$comm</community></set></node></route-policy></routing>");
+        as-path("Remove the prepend action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as nc:operation='remove'/><prepend-count nc:operation='remove'/></set></node></route-policy></routing>");
+    }
+}
+quit("Return to the system view"), vc_if_exit("system");

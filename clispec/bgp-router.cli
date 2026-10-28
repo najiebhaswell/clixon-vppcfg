@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# router bgp mode (prompt "BR(config-router)#").
+CLICON_MODE="configure-router";
+CLICON_PROMPT="%H(config-router)# ";
+CLICON_PLUGIN="cli_vppcfg";
+
+bgp("BGP settings") router-id("Router ID used by BIRD (also the BGP identifier)") <rid:ipv4addr>("A.B.C.D"), vc_edit("<routing><router-id>$rid</router-id></routing>");
+network("Originate a prefix (installed as a blackhole route and announced where a route-map permits it)") <prefix:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("Prefix A.B.C.D/len or X:X::X/len, without host bits"), vc_edit("<routing><bgp><network><prefix>$prefix</prefix></network></bgp></routing>");
+neighbor("Configure a BGP neighbor or peer group") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Neighbor", "/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Neighbor address or peer-group name")|<peer:string>("Neighbor address or peer-group name")) {
+    remote-as("AS number of the neighbor (equal to the local AS: iBGP)") <asn:uint32 range[1:4294967295]>("Remote AS number"), vc_edit("<routing><bgp><PEER><remote-as>$asn</remote-as></PEER></bgp></routing>");
+    peer-group("Create a peer group with this name"), vc_edit("<routing><bgp><peer-group><name>$peer</name></peer-group></bgp></routing>"); {
+        (<group:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Peer group")|<group:string>("Peer group name")), vc_edit("<routing><bgp><neighbor><address>$peer</address><peer-group>$group</peer-group></neighbor></bgp></routing>");
+    }
+    description("Neighbor description") <text:rest>("Up to 80 characters, no double quotes"), vc_edit("<routing><bgp><PEER><description>$text</description></PEER></bgp></routing>");
+    update-source("Local address used for the session") <src:string regexp:"[0-9a-fA-F:.]+">("Local IPv4 or IPv6 address"), vc_edit("<routing><bgp><PEER><source-address>$src</source-address></PEER></bgp></routing>");
+    password("TCP MD5 password; the peer must use the same") <pw:string regexp:"[!#-~]{1,80}">("Password: printable characters, no spaces or double quotes"), vc_edit("<routing><bgp><PEER><password>$pw</password></PEER></bgp></routing>");
+    ebgp-multihop("Allow an eBGP neighbor that is not directly connected (default 255 hops)"), vc_edit("<routing><bgp><PEER><multihop>255</multihop></PEER></bgp></routing>"); {
+        <hops:uint8 range[1:255]>("Maximum hop count"), vc_edit("<routing><bgp><PEER><multihop>$hops</multihop></PEER></bgp></routing>");
+    }
+    fall-over("Session failure detection") bfd("Use BFD to detect a dead neighbor quickly"), vc_edit("<routing><bgp><PEER><bfd>true</bfd></PEER></bgp></routing>");
+    timers("BGP timers") <ka:uint16 range[1:65535]>("Keepalive interval in seconds") <hold:uint16 range[3:65535]>("Hold time in seconds"), vc_edit("<routing><bgp><PEER><keepalive>$ka</keepalive><hold-time>$hold</hold-time></PEER></bgp></routing>");
+    shutdown("Administratively disable the session"), vc_edit("<routing><bgp><PEER><shutdown>true</shutdown></PEER></bgp></routing>");
+}
+address-family("Enter address-family configuration") {
+    ipv4("IPv4") unicast("Unicast"), vc_enter("configure-router-af", "-", "af=ipv4");
+    ipv6("IPv6") unicast("Unicast"), vc_enter("configure-router-af", "-", "af=ipv6");
+}
+no("Negate a command") {
+    bgp("BGP settings") router-id("Remove the router ID"), vc_edit("<routing><router-id nc:operation='remove'/></routing>");
+    network("Stop originating a prefix") <prefix:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("Prefix"), vc_edit("<routing><bgp><network nc:operation='remove'><prefix>$prefix</prefix></network></bgp></routing>");
+    neighbor("Remove a neighbor or peer group, or one of its settings") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Neighbor", "/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Neighbor address or peer-group name")|<peer:string>("Neighbor address or peer-group name")), vc_edit("<routing><bgp><PEER nc:operation='remove'></PEER></bgp></routing>"); {
+        remote-as("Remove the remote AS"), vc_edit("<routing><bgp><PEER><remote-as nc:operation='remove'/></PEER></bgp></routing>");
+        peer-group("Remove the peer group"), vc_edit("<routing><bgp><PEER nc:operation='remove'></PEER></bgp></routing>"); {
+            (<group:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Peer group")|<group:string>("Peer group name")), vc_edit("<routing><bgp><neighbor><address>$peer</address><peer-group nc:operation='remove'/></neighbor></bgp></routing>");
+        }
+        description("Remove the description"), vc_edit("<routing><bgp><PEER><description nc:operation='remove'/></PEER></bgp></routing>");
+        update-source("Remove the local address"), vc_edit("<routing><bgp><PEER><source-address nc:operation='remove'/></PEER></bgp></routing>");
+        password("Remove the password"), vc_edit("<routing><bgp><PEER><password nc:operation='remove'/></PEER></bgp></routing>");
+        ebgp-multihop("Only allow directly connected eBGP neighbors"), vc_edit("<routing><bgp><PEER><multihop nc:operation='remove'/></PEER></bgp></routing>");
+        fall-over("Session failure detection") bfd("Stop using BFD"), vc_edit("<routing><bgp><PEER><bfd nc:operation='remove'/></PEER></bgp></routing>");
+        timers("Revert to the default timers"), vc_edit("<routing><bgp><PEER><keepalive nc:operation='remove'/><hold-time nc:operation='remove'/></PEER></bgp></routing>");
+        shutdown("Enable the session"), vc_edit("<routing><bgp><PEER><shutdown nc:operation='remove'/></PEER></bgp></routing>");
+    }
+}
+exit("Return to global configuration mode"), vc_if_exit("configure");

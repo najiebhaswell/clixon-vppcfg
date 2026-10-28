@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# address-family mode under router bgp (prompt "BR(config-router-af)#"); $af = ipv4 | ipv6.
+CLICON_MODE="configure-router-af";
+CLICON_PROMPT="%H(config-router-af)# ";
+CLICON_PLUGIN="cli_vppcfg";
+
+network("Originate a prefix (installed as a blackhole route and announced where a route-map permits it)") <prefix:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("Prefix without host bits"), vc_edit("<routing><bgp><network><prefix>$prefix</prefix></network></bgp></routing>");
+neighbor("Per-family neighbor settings") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Neighbor", "/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Neighbor address or peer-group name")|<peer:string>("Neighbor address or peer-group name")) {
+    activate("Exchange routes of this family with the neighbor (default: the family of its address)"), vc_edit("<routing><bgp><PEER><$af><activate>true</activate></$af></PEER></bgp></routing>");
+    route-map("Apply a route map; without one nothing is accepted or announced (RFC 8212)") (<rm:string vc_expand_names("/bgp:routing/bgp:route-policy", "name", "Route map")>("Route map")|<rm:string>("Route map name")) {
+        in("Routes received from the neighbor"), vc_edit("<routing><bgp><PEER><$af><import-policy>$rm</import-policy></$af></PEER></bgp></routing>");
+        out("Routes announced to the neighbor"), vc_edit("<routing><bgp><PEER><$af><export-policy>$rm</export-policy></$af></PEER></bgp></routing>");
+    }
+    bird-filter("Use a hand-written BIRD filter from bird.conf instead of a route map") <bf:string regexp:"[A-Za-z][A-Za-z0-9_]*">("BIRD filter name") {
+        in("Routes received from the neighbor"), vc_edit("<routing><bgp><PEER><$af><import-filter>$bf</import-filter></$af></PEER></bgp></routing>");
+        out("Routes announced to the neighbor"), vc_edit("<routing><bgp><PEER><$af><export-filter>$bf</export-filter></$af></PEER></bgp></routing>");
+    }
+    maximum-prefix("Restart the session when the neighbor sends more prefixes") <max:uint32 range[1:4294967295]>("Maximum number of prefixes"), vc_edit("<routing><bgp><PEER><$af><max-prefix>$max</max-prefix></$af></PEER></bgp></routing>");
+    next-hop-self("Announce routes with this router as next hop"), vc_edit("<routing><bgp><PEER><$af><next-hop-self>true</next-hop-self></$af></PEER></bgp></routing>");
+}
+no("Negate a command") {
+    network("Stop originating a prefix") <prefix:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("Prefix"), vc_edit("<routing><bgp><network nc:operation='remove'><prefix>$prefix</prefix></network></bgp></routing>");
+    neighbor("Per-family neighbor settings") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Neighbor", "/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Neighbor address or peer-group name")|<peer:string>("Neighbor address or peer-group name")) {
+        activate("Do not exchange routes of this family with the neighbor"), vc_edit("<routing><bgp><PEER><$af><activate>false</activate></$af></PEER></bgp></routing>");
+        route-map("Remove a route map") {
+            in("Inbound"), vc_edit("<routing><bgp><PEER><$af><import-policy nc:operation='remove'/></$af></PEER></bgp></routing>");
+            out("Outbound"), vc_edit("<routing><bgp><PEER><$af><export-policy nc:operation='remove'/></$af></PEER></bgp></routing>");
+        }
+        bird-filter("Remove a BIRD filter") {
+            in("Inbound"), vc_edit("<routing><bgp><PEER><$af><import-filter nc:operation='remove'/></$af></PEER></bgp></routing>");
+            out("Outbound"), vc_edit("<routing><bgp><PEER><$af><export-filter nc:operation='remove'/></$af></PEER></bgp></routing>");
+        }
+        maximum-prefix("Remove the prefix limit"), vc_edit("<routing><bgp><PEER><$af><max-prefix nc:operation='remove'/></$af></PEER></bgp></routing>");
+        next-hop-self("Keep the original next hop"), vc_edit("<routing><bgp><PEER><$af><next-hop-self nc:operation='remove'/></$af></PEER></bgp></routing>");
+    }
+}
+exit-address-family("Return to router bgp mode"), vc_if_exit("configure-router");
+exit("Return to router bgp mode"), vc_if_exit("configure-router");

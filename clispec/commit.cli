@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # commit/validate/abort/end, available in global and interface configuration modes.
-CLICON_MODE="configure:configure-if:configure-subif:configure-loop:configure-bond";
+CLICON_MODE="configure:configure-if:configure-subif:configure-loop:configure-bond:configure-router:configure-router-af:configure-rmap";
 CLICON_PLUGIN="cli_vppcfg";
 
 commit("Validate and apply the candidate to VPP; the result is saved and survives reboots"), vc_commit(); {
