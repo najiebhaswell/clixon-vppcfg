@@ -20,6 +20,7 @@ install: all
 	install -D -m 644 build/backend_vppcfg.so $(DESTDIR)$(LIBDIR)/backend/backend_vppcfg.so
 	install -D -m 644 build/cli_vppcfg.so $(DESTDIR)$(LIBDIR)/cli/cli_vppcfg.so
 	install -d $(DESTDIR)$(LIBDIR)/clispec
+	rm -f $(DESTDIR)$(LIBDIR)/clispec/*.cli
 	install -m 644 clispec/*.cli $(DESTDIR)$(LIBDIR)/clispec/
 	install -D -m 644 yang/vppcfg@2026-10-28.yang $(DESTDIR)$(PREFIX)/share/clixon-vppcfg/yang/vppcfg@2026-10-28.yang
 	install -D -m 755 helper/clixon-vppcfg $(DESTDIR)$(PREFIX)/libexec/clixon-vppcfg/clixon-vppcfg

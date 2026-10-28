@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Bond (LAG) mode (prompt "BR(config-if)#").
+CLICON_MODE="configure-bond";
+CLICON_PROMPT="%H(config-if)# ";
+CLICON_PLUGIN="cli_vppcfg";
+
+member("Add a physical interface to the bond; it must not have its own IP or lcp configuration") <ifname:string vc_expand_ifs("phy")>("Physical interface"), vc_add_ll("interface", "ifname", "bond");
+mode("Bonding mode (default: lacp)") (<bmode:string keyword:lacp>("IEEE 802.3ad LACP; the switch must run LACP too (recommended)")|<bmode:string keyword:xor>("Static LAG, hash-based, no LACP negotiation")|<bmode:string keyword:active-backup>("One active member, the others on standby; no switch configuration needed")|<bmode:string keyword:round-robin>("Send frames on each member in turn")|<bmode:string keyword:broadcast>("Send every frame on all members")), vc_set_leaf("mode", "bmode", "bond");
+load-balance("Hash that spreads flows over the members; only for lacp and xor (default: l34)") (<lb:string keyword:l2>("Source and destination MAC address")|<lb:string keyword:l23>("MAC and IP addresses")|<lb:string keyword:l34>("IP addresses and TCP/UDP ports; best spread for routed traffic")), vc_set_leaf("load-balance", "lb", "bond");
+mac-address("Set the bond MAC address (default: taken from the first member)") <mac:macaddr>("xx:xx:xx:xx:xx:xx"), vc_set_leaf("mac", "mac");
+shutdown("Administratively disable the bond"), vc_set_leaf("state", "=down");
+l2xc("Cross-connect all frames to another interface at layer 2 (no IP on this bond)") (<ifname:string vc_expand_ifs()>("Target interface")|<ifname:string>("Target interface")), vc_set_leaf("l2xc", "ifname");
+no("Negate a command") {
+    member("Remove a member from the bond") <ifname:string vc_expand_ifs("phy")>("Physical interface"), vc_del_ll("interface", "ifname", "bond");
+    mode("Revert to the default mode (lacp)"), vc_del_leaf("mode", "bond");
+    load-balance("Revert to the default hash (l34)"), vc_del_leaf("load-balance", "bond");
+    mac-address("Revert to the MAC address of the first member"), vc_del_leaf("mac");
+    shutdown("Administratively enable the bond"), vc_del_leaf("state");
+    l2xc("Remove the layer 2 cross-connect"), vc_del_leaf("l2xc");
+}

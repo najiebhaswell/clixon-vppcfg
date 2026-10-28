@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Commands shared by all interface modes (physical, sub-interface, loopback, bond).
+CLICON_MODE="configure-if:configure-subif:configure-loop:configure-bond";
+CLICON_PLUGIN="cli_vppcfg";
+
+description("Interface description, shown in 'show running-config' and as SNMP ifAlias") <text:rest>("Up to 64 characters, no quotes"), vc_set_leaf("description", "text");
+mtu("IP MTU in bytes (default 1500; a sub-interface inherits its parent's MTU)") <mtu:uint16 range[128:9216]>("128-9216; must not exceed the parent's MTU"), vc_set_leaf("mtu", "mtu");
+ip("IPv4 settings") address("Add an IPv4 address; repeat for secondary addresses") <addr:string regexp:"[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/[0-9]+">("A.B.C.D/length, e.g. 198.51.100.1/30"), vc_add_ll("address", "addr");
+ipv6("IPv6 settings") address("Add an IPv6 address; repeat for more addresses") <addr:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("X:X::X/length, e.g. 2001:db8::1/64"), vc_add_ll("address", "addr");
+lcp("Create a Linux TAP (linux-cp) in the dataplane netns so Linux and BIRD can use this interface") <name:string regexp:"[a-z][a-z0-9.-]{0,14}">("Linux interface name, max. 15 characters; sub-interface: <parent lcp>.<vlan>, e.g. cx5-0.100"), vc_set_leaf("lcp", "name");
+unnumbered("Use the IP address of another interface instead of a local address") (<ifname:string vc_expand_ifs()>("Interface whose address is borrowed, usually a loopback")|<ifname:string>("Interface whose address is borrowed, usually a loopback")), vc_set_leaf("unnumbered", "ifname");
+mpls("MPLS settings") enable("Enable MPLS forwarding on this interface"), vc_set_leaf("mpls", "=true");
+
+no("Negate a command") {
+    description("Remove the description"), vc_del_leaf("description");
+    mtu("Revert to the default MTU (1500, or the parent's MTU)"), vc_del_leaf("mtu");
+    ip("IPv4 settings") address("Remove an IPv4 address") <addr:string regexp:"[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+/[0-9]+">("A.B.C.D/length as configured"), vc_del_ll("address", "addr");
+    ipv6("IPv6 settings") address("Remove an IPv6 address") <addr:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("X:X::X/length as configured"), vc_del_ll("address", "addr");
+    lcp("Remove the Linux TAP (linux-cp) of this interface"), vc_del_leaf("lcp");
+    unnumbered("Stop borrowing another interface's address"), vc_del_leaf("unnumbered");
+    mpls("Disable MPLS forwarding"), vc_del_leaf("mpls");
+}
+exit("Return to global configuration mode"), vc_if_exit();

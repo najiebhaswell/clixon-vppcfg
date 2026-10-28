@@ -34,7 +34,7 @@
 
 enum iftype { IF_PHY, IF_SUB, IF_LOOP, IF_BOND };
 
-static char _ifname[64]; /* current interface in configure-if mode */
+static char _ifname[64]; /* current interface in the interface configuration modes */
 
 static int
 all_digits(const char *s)
@@ -296,7 +296,9 @@ check_phy_exists(const char *name)
     return found ? 0 : 1;
 }
 
-/* interface <ifname>: select/create an interface and enter configure-if mode */
+/* interface <ifname>: select/create an interface and enter the mode for its type, so that '?'
+ * only lists commands that apply: configure-if (physical), configure-subif, configure-loop,
+ * configure-bond. */
 int
 vc_if_enter(clixon_handle h,
             cvec         *cvv,
@@ -304,8 +306,9 @@ vc_if_enter(clixon_handle h,
 {
     char  parent[64];
     char  subid[16];
-    char *name = cvec_find_str(cvv, "ifname");
-    int   ret;
+    char       *name = cvec_find_str(cvv, "ifname");
+    const char *mode;
+    int         ret;
 
     if (!name_ok(name))
         return user_error("Invalid interface name: %s", name ? name : "");
@@ -317,7 +320,13 @@ vc_if_enter(clixon_handle h,
     if (edit_if(h, name, 0, "", NULL) < 0)
         return -1;
     snprintf(_ifname, sizeof(_ifname), "%s", name);
-    return cli_set_syntax_mode(h, "configure-if") < 0 ? -1 : 0;
+    switch (if_classify(name, parent, sizeof(parent), subid, sizeof(subid))) {
+    case IF_SUB:  mode = "configure-subif"; break;
+    case IF_LOOP: mode = "configure-loop"; break;
+    case IF_BOND: mode = "configure-bond"; break;
+    default:      mode = "configure-if"; break;
+    }
+    return cli_set_syntax_mode(h, (char *)mode) < 0 ? -1 : 0;
 }
 
 /* no interface <ifname>: remove all configuration of the interface from the candidate */
@@ -741,7 +750,7 @@ vc_end(clixon_handle h,
     return cli_set_syntax_mode(h, "exec") < 0 ? -1 : 0;
 }
 
-/* exit from configure-if to configure mode */
+/* exit from an interface mode to global configuration mode */
 int
 vc_if_exit(clixon_handle h,
            cvec         *cvv,
@@ -751,7 +760,8 @@ vc_if_exit(clixon_handle h,
     return cli_set_syntax_mode(h, "configure") < 0 ? -1 : 0;
 }
 
-/*! Interface names defined in the candidate datastore (physical, sub-interfaces, loopbacks, bonds). */
+/*! Interfaces defined in the candidate datastore (physical, sub-interfaces, loopbacks, bonds).
+ * Each entry has the interface name as cv name and its description (or "") as value. */
 static int
 candidate_ifnames(clixon_handle h,
                   cvec         *out)
@@ -767,6 +777,7 @@ candidate_ifnames(clixon_handle h,
     size_t      p;
     char        buf[160];
     char       *name;
+    char       *desc;
     char       *id;
 
     if (clicon_rpc_get_config(h, NULL, "candidate", "/", NULL, NULL, &xt) < 0 || xt == NULL)
@@ -778,12 +789,14 @@ candidate_ifnames(clixon_handle h,
         for (i = 0; i < len; i++) {
             if ((name = xml_find_body(vec[i], "name")) == NULL)
                 continue;
-            cvec_add_string(out, NULL, name);
+            desc = xml_find_body(vec[i], "description");
+            cvec_add_string(out, name, desc ? desc : "");
             xs = NULL;
             while ((xs = xml_child_each(vec[i], xs, CX_ELMNT)) != NULL)
                 if (strcmp(xml_name(xs), "sub-interface") == 0 && (id = xml_find_body(xs, "id")) != NULL) {
                     snprintf(buf, sizeof(buf), "%s.%s", name, id);
-                    cvec_add_string(out, NULL, buf);
+                    desc = xml_find_body(xs, "description");
+                    cvec_add_string(out, buf, desc ? desc : "");
                 }
         }
         free(vec);
@@ -794,20 +807,40 @@ candidate_ifnames(clixon_handle h,
     return 0;
 }
 
-/*! Help text for a completion candidate, by interface type. */
+/*! Description of ifname in the candidate list, or NULL. */
 static const char *
-type_help(const char *name,
-          int         in_vpp)
+candidate_desc(cvec       *cand,
+               const char *ifname)
 {
-    char parent[64];
-    char subid[16];
+    cg_var *cv = NULL;
+
+    while ((cv = cvec_each(cand, cv)) != NULL)
+        if (strcmp(cv_name_get(cv), ifname) == 0 && cv_string_get(cv)[0] != '\0')
+            return cv_string_get(cv);
+    return NULL;
+}
+
+/*! Help text for a completion candidate: interface type, commit state and description. */
+static void
+if_help(const char *name,
+        int         in_vpp,
+        const char *desc,
+        char       *buf,
+        size_t      len)
+{
+    char        parent[64];
+    char        subid[16];
+    const char *type;
 
     switch (if_classify(name, parent, sizeof(parent), subid, sizeof(subid))) {
-    case IF_SUB:  return in_vpp ? "Sub-interface" : "Sub-interface (not yet committed)";
-    case IF_LOOP: return in_vpp ? "Loopback" : "Loopback (not yet committed)";
-    case IF_BOND: return in_vpp ? "Bond (LAG)" : "Bond (LAG) (not yet committed)";
-    default:      return in_vpp ? "Physical interface" : "Physical interface (not in VPP)";
+    case IF_SUB:  type = "Sub-interface"; break;
+    case IF_LOOP: type = "Loopback"; break;
+    case IF_BOND: type = "Bond (LAG)"; break;
+    default:      type = "Physical interface"; break;
     }
+    snprintf(buf, len, "%s%s%s%s", type,
+             in_vpp ? "" : " (not yet committed)",
+             desc ? ": " : "", desc ? desc : "");
 }
 
 /*! Add a completion candidate with help text unless it is already listed. */
@@ -847,7 +880,8 @@ next_index(cvec       *names,
 
 /*! Tab completion of interface names: VPP interfaces, interfaces only present in the candidate,
  * and (with clispec argument "new") the next free loopN and BondEthernetN names.
- * With argument "phy", only physical interfaces that exist in VPP (bond members). */
+ * With argument "phy", only physical interfaces that exist in VPP (bond members).
+ * Help texts show the interface type and its configured description. */
 int
 vc_expand_ifs(clixon_handle h,
               char         *name,
@@ -860,30 +894,33 @@ vc_expand_ifs(clixon_handle h,
     cvec       *cand = cvec_new(0);
     cg_var     *cv = NULL;
     const char *mode = arg_str(argv, 0);
+    const char *ifn;
+    char        parent[64];
+    char        subid[16];
+    char        help[160];
     char        buf[64];
+    int         phy_only = mode != NULL && strcmp(mode, "phy") == 0;
 
     vpp_ifnames(vpp);
-    if (mode != NULL && strcmp(mode, "phy") == 0) {
-        char parent[64];
-        char subid[16];
-
-        while ((cv = cvec_each(vpp, cv)) != NULL)
-            if (if_classify(cv_string_get(cv), parent, sizeof(parent), subid, sizeof(subid)) == IF_PHY)
-                add_completion(commands, helptexts, cv_string_get(cv), "Physical interface");
-        cvec_free(vpp);
-        cvec_free(cand);
-        return 0;
-    }
     candidate_ifnames(h, cand);
-    while ((cv = cvec_each(vpp, cv)) != NULL)
-        add_completion(commands, helptexts, cv_string_get(cv), type_help(cv_string_get(cv), 1));
-    while ((cv = cvec_each(cand, cv)) != NULL)
-        add_completion(commands, helptexts, cv_string_get(cv), type_help(cv_string_get(cv), 0));
+    while ((cv = cvec_each(vpp, cv)) != NULL) {
+        ifn = cv_string_get(cv);
+        if (phy_only && if_classify(ifn, parent, sizeof(parent), subid, sizeof(subid)) != IF_PHY)
+            continue;
+        if_help(ifn, 1, candidate_desc(cand, ifn), help, sizeof(help));
+        add_completion(commands, helptexts, ifn, help);
+    }
+    if (!phy_only)
+        while ((cv = cvec_each(cand, cv)) != NULL) {
+            ifn = cv_name_get(cv);
+            if_help(ifn, 0, candidate_desc(cand, ifn), help, sizeof(help));
+            add_completion(commands, helptexts, ifn, help);
+        }
     if (mode != NULL && strcmp(mode, "new") == 0) {
         snprintf(buf, sizeof(buf), "loop%d", next_index(commands, "loop"));
-        add_completion(commands, helptexts, buf, "New loopback");
+        add_completion(commands, helptexts, buf, "New loopback (created on commit)");
         snprintf(buf, sizeof(buf), "BondEthernet%d", next_index(commands, "BondEthernet"));
-        add_completion(commands, helptexts, buf, "New bond (LAG); add members with 'member'");
+        add_completion(commands, helptexts, buf, "New bond (LAG), created on commit; add members with 'member'");
     }
     cvec_free(vpp);
     cvec_free(cand);

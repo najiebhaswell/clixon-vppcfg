@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Sub-interface mode (prompt "BR(config-subif)#").
+CLICON_MODE="configure-subif";
+CLICON_PROMPT="%H(config-subif)# ";
+CLICON_PLUGIN="cli_vppcfg";
+
+encapsulation("VLAN tags matched by this sub-interface (default: dot1q <sub-interface number>)") {
+    dot1q("802.1Q customer tag (TPID 0x8100)") <outer:uint16 range[1:4095]>("Outer VLAN ID, 1-4095") [inner-dot1q("Add an inner 802.1Q tag (QinQ)") <inner:uint16 range[1:4095]>("Inner VLAN ID, 1-4095")] [<exact:string keyword:exact-match>("Match only frames carrying exactly these tags; required when lcp is set")], vc_encap("dot1q");
+    dot1ad("802.1ad service tag (TPID 0x88a8)") <outer:uint16 range[1:4095]>("Outer VLAN ID, 1-4095") [inner-dot1q("Add an inner 802.1Q tag") <inner:uint16 range[1:4095]>("Inner VLAN ID, 1-4095")] [<exact:string keyword:exact-match>("Match only frames carrying exactly these tags; required when lcp is set")], vc_encap("dot1ad");
+}
+shutdown("Administratively disable the sub-interface"), vc_set_leaf("state", "=down");
+l2xc("Cross-connect all frames to another interface at layer 2 (no IP on this sub-interface)") (<ifname:string vc_expand_ifs()>("Target interface")|<ifname:string>("Target interface")), vc_set_leaf("l2xc", "ifname");
+no("Negate a command") {
+    encapsulation("Revert to dot1q <sub-interface number>"), vc_del_leaf("encapsulation");
+    shutdown("Administratively enable the sub-interface"), vc_del_leaf("state");
+    l2xc("Remove the layer 2 cross-connect"), vc_del_leaf("l2xc");
+}

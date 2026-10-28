@@ -1,30 +1,30 @@
 # SPDX-License-Identifier: Apache-2.0
 # Show commands, available in all modes.
-CLICON_MODE="exec:configure:configure-if";
+CLICON_MODE="exec:configure:configure-if:configure-subif:configure-loop:configure-bond";
 CLICON_PLUGIN="cli_vppcfg";
 
-show("Show information") {
-    running-config("Active configuration (running)"), vc_show_config("running");
+show("Show operational state and configuration") {
+    running-config("Committed configuration, in Cisco style"), vc_show_config("running");
     candidate-config("Candidate configuration, including uncommitted changes"), vc_show_config("candidate");
-    configuration("Configuration") diff("Uncommitted changes (candidate vs running)"), vc_show_diff();
-    interfaces("VPP interface state and counters") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "interface", "$ifname");
-    hardware("NIC hardware details") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "hardware-interfaces", "$ifname");
-    ip("IPv4") {
-        interface("Interface") brief("Interface and address summary"), vc_ip_brief();
-        route("VPP routing table (FIB)") {
-            summary("Prefix count per length"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "summary");
-            <prefix:string>("IPv4 address or prefix"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "$prefix");
+    configuration("Configuration changes") diff("Uncommitted changes: candidate compared to running"), vc_show_diff();
+    interfaces("VPP interface state, MTU and counters") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "interface", "$ifname");
+    hardware("NIC details: link speed, queues, driver and error counters") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "hardware-interfaces", "$ifname");
+    ip("IPv4 information") {
+        interface("Interface information") brief("Interfaces with admin state and IPv4/IPv6 addresses"), vc_ip_brief();
+        route("IPv4 forwarding table (VPP FIB)") {
+            summary("Number of IPv4 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "summary");
+            <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "$prefix");
         }
     }
-    ipv6("IPv6") route("VPP routing table (FIB)") {
-        summary("Prefix count per length"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "summary");
-        <prefix:string>("IPv6 address or prefix"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "$prefix");
+    ipv6("IPv6 information") route("IPv6 forwarding table (VPP FIB)") {
+        summary("Number of IPv6 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "summary");
+        <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "$prefix");
     }
-    lcp("VPP <-> Linux TAP interface pairs"), vc_run("/usr/bin/vppctl", "show", "lcp");
-    bond("Bond/LACP status"), vc_run("/usr/bin/vppctl", "show", "bond", "details");
-    bgp("BGP (BIRD)") {
-        summary("Session summary"), vc_run("/usr/sbin/birdc", "show", "protocols");
-        neighbor("Session details") <peer:string>("BIRD protocol name"), vc_run("/usr/sbin/birdc", "show", "protocols", "all", "$peer");
+    lcp("linux-cp pairs: VPP interface and its Linux TAP in the dataplane netns"), vc_run("/usr/bin/vppctl", "show", "lcp");
+    bond("Bond members and LACP state"), vc_run("/usr/bin/vppctl", "show", "bond", "details");
+    bgp("BGP sessions (BIRD)") {
+        summary("All BIRD protocols with state and uptime"), vc_run("/usr/sbin/birdc", "show", "protocols");
+        neighbor("Full details of one BIRD protocol") <peer:string>("Protocol name as shown in 'show bgp summary'"), vc_run("/usr/sbin/birdc", "show", "protocols", "all", "$peer");
     }
-    version("VPP version"), vc_run("/usr/bin/vppctl", "show", "version");
+    version("VPP version and build"), vc_run("/usr/bin/vppctl", "show", "version");
 }

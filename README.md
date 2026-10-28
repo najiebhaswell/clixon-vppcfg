@@ -82,11 +82,16 @@ one-shot: `rtr show running-config`.
 |---|---|
 | exec (`BR#`) | `configure [terminal]`, `show ...`, `exit` |
 | configure (`BR(config)#`) | `interface <name>`, `no interface <name>`, `commit`, `validate`, `abort`, `end` |
-| configure-if (`BR(config-if)#`) | `description`, `mtu`, `mac-address`, `ip address A.B.C.D/n`, `ipv6 address X::/n`, `lcp`, `shutdown`, `unnumbered`, `l2xc`, `mpls enable`, `sflow enable`, `encapsulation dot1q\|dot1ad <vid> [inner-dot1q <vid>] [exact-match]`, `member`, `mode`, `load-balance`, `no ...`, `exit` |
+| all interface modes | `description`, `mtu`, `ip address A.B.C.D/n`, `ipv6 address X::/n`, `lcp`, `unnumbered`, `mpls enable`, `no ...`, `exit`, plus `commit`/`validate`/`abort`/`end`/`show` |
+| physical (`BR(config-if)#`) | `mac-address`, `shutdown`, `l2xc`, `sflow enable` |
+| sub-interface (`BR(config-subif)#`) | `encapsulation dot1q\|dot1ad <vid> [inner-dot1q <vid>] [exact-match]`, `shutdown`, `l2xc` |
+| loopback (`BR(config-if)#`) | `mac-address` |
+| bond (`BR(config-if)#`) | `member`, `mode`, `load-balance`, `mac-address`, `shutdown`, `l2xc` |
 | show | `running-config`, `candidate-config`, `configuration diff`, `interfaces [name]`, `hardware [name]`, `ip interface brief`, `ip route summary\|<prefix>`, `ipv6 route ...`, `lcp`, `bond`, `bgp summary\|neighbor <name>`, `version` |
 
-The interface name selects its type: `loopN` (loopback), `BondEthernetN` (bond), `parent.N`
-(sub-interface), anything else is a physical interface. A physical interface that does not exist in
+The interface name selects its type and mode: `loopN` (loopback), `BondEthernetN` (bond), `parent.N`
+(sub-interface), anything else is a physical interface. Each type has its own mode, so `?` only lists
+the commands that apply, and `TAB` on `interface` shows each interface's type and description. A physical interface that does not exist in
 VPP is rejected as soon as you type `interface <name>`; loopbacks and bonds may be new, and `TAB`
 suggests the next free `loopN` and `BondEthernetN`.
 
