@@ -19,7 +19,7 @@ load-balance("Hash that spreads flows over the members; lacp-static and manual l
 trunkport("Add a physical member interface") <ifname:string vc_expand_ifs("phy", "vrp")>("Physical interface; it must not have its own IP or lcp configuration"), vc_add_ll("interface", "ifname", "bond");
 mac-address("Set the Eth-Trunk MAC address (default: taken from the first member)") <mac:macaddr>("xx:xx:xx:xx:xx:xx"), vc_set_leaf("mac", "mac");
 shutdown("Administratively disable the Eth-Trunk"), vc_set_leaf("state", "=down");
-l2xc("Cross-connect all frames to another interface at layer 2 (VPP feature)") (<ifname:string vc_expand_ifs("", "vrp")>("Target interface")|<ifname:string>("Target interface")), vc_set_leaf("l2xc", "ifname");
+l2xc("Cross-connect all frames to another interface at layer 2 (VPP feature)") (<ifname:string vc_expand_ifs("all", "vrp")>("Target interface")|<ifname:string>("Target interface")), vc_set_leaf("l2xc", "ifname");
 undo("Undo a command") {
     mode("Revert to the default mode (lacp-static)"), vc_del_leaf("mode", "bond");
     load-balance("Revert to the default hash (src-dst-ip-port)"), vc_del_leaf("load-balance", "bond");

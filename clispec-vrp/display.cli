@@ -4,26 +4,26 @@ CLICON_MODE="user:system:vrp-if:vrp-subif:vrp-loop:vrp-trunk";
 CLICON_PLUGIN="cli_vppcfg";
 
 display("Display information") {
-    current-configuration("Committed configuration"), vc_show_config("running", "vrp");
-    configuration("Configuration") candidate("Candidate configuration, including uncommitted changes"), vc_show_config("candidate", "vrp"); {
+    current-configuration("Committed (active) configuration"), vc_show_config("running", "vrp");
+    configuration("Candidate configuration and uncommitted changes") candidate("Candidate configuration, including uncommitted changes"), vc_show_config("candidate", "vrp"); {
         changes("Uncommitted changes: candidate compared to running"), vc_show_diff("vrp");
     }
-    interface("VPP interface state, MTU and counters") [(<ifname:string vc_expand_ifs("", "vrp")>("Interface name")|<ifname:string>("Interface name"))], vc_run("/usr/bin/vppctl", "show", "interface", "@ifname");
+    interface("Interface state, MTU and counters (all interfaces, or one)") [(<ifname:string vc_expand_ifs("all", "vrp")>("Interface name")|<ifname:string>("Interface name"))], vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "interface", "@ifname");
     ip("IPv4 information") {
         interface("Interface information") brief("Interfaces with IP addresses and state"), vc_ip_brief("vrp");
         routing-table("IPv4 forwarding table (VPP FIB)") {
-            statistics("Number of IPv4 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "summary");
-            <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "$prefix");
+            statistics("Number of IPv4 prefixes per prefix length"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip", "fib", "summary");
+            <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip", "fib", "$prefix");
         }
     }
     ipv6("IPv6 information") routing-table("IPv6 forwarding table (VPP FIB)") {
-        statistics("Number of IPv6 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "summary");
-        <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "$prefix");
+        statistics("Number of IPv6 prefixes per prefix length"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip6", "fib", "summary");
+        <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip6", "fib", "$prefix");
     }
-    eth-trunk("Eth-Trunk members and LACP state"), vc_run("/usr/bin/vppctl", "show", "bond", "details");
-    lcp("linux-cp pairs: VPP interface and its Linux TAP in the dataplane netns"), vc_run("/usr/bin/vppctl", "show", "lcp");
+    eth-trunk("Eth-Trunk members and LACP state"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "bond", "details");
+    lcp("linux-cp pairs: VPP interface and its Linux TAP in the dataplane netns"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "lcp");
     bgp("BGP information (BIRD)") peer("BGP peers: all BIRD protocols with state and uptime"), vc_run("/usr/sbin/birdc", "show", "protocols"); {
         <peer:string>("Protocol name as shown in 'display bgp peer'") verbose("Full details of one protocol"), vc_run("/usr/sbin/birdc", "show", "protocols", "all", "$peer");
     }
-    version("VPP version and build"), vc_run("/usr/bin/vppctl", "show", "version");
+    version("VPP version and build"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "version");
 }

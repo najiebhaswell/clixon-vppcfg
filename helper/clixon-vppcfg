@@ -14,6 +14,8 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
   clixon-vppcfg diff <a.xml> <b.xml> [--style cisco|vrp]
                                          unified diff of the rendered configuration from a to b
   clixon-vppcfg changed <a.xml> <b.xml>  exit 1 if a and b differ, 0 if identical
+  clixon-vppcfg vppctl [--style cisco|vrp] <command...>
+                                         run vppctl; with vrp, show Eth-TrunkN/LoopBackN names
   clixon-vppcfg ip-brief [--style cisco|vrp]
                                          summary of VPP interfaces and their addresses
 """
@@ -503,6 +505,23 @@ def cmd_changed(a_path, b_path):
     sys.exit(1 if xml_to_cfg(a_path) != xml_to_cfg(b_path) else 0)
 
 
+def vrp_rename_output(text):
+    """Rewrite VPP names in vppctl output to VRP aliases, padding to keep columns aligned."""
+    def sub(m):
+        new = vrp_name(m.group(0))
+        pad = len(m.group(0)) - len(new)
+        follow = m.string[m.end():m.end() + 1]
+        return new + (" " * pad if pad > 0 and follow == " " else "")
+    return re.sub(r"\b(?:BondEthernet\d+(?:\.\d+)?|loop\d+)\b", sub, text)
+
+
+def cmd_vppctl(args, style="cisco"):
+    r = subprocess.run([VPPCTL, *args], capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    sys.stdout.write(vrp_rename_output(out) if style == "vrp" else out)
+    sys.exit(r.returncode)
+
+
 def cmd_ip_brief(style="cisco"):
     r = subprocess.run([VPPCTL, "show", "interface", "address"], capture_output=True, text=True)
     if r.returncode != 0:
@@ -566,6 +585,8 @@ def main():
         cmd_diff(*args, style=style)
     elif verb == "changed" and len(args) == 2:
         cmd_changed(*args)
+    elif verb == "vppctl" and args:
+        cmd_vppctl(args, style)
     elif verb == "ip-brief" and not args:
         cmd_ip_brief(style)
     else:
