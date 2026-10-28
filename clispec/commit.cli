@@ -8,5 +8,5 @@ commit("Validate and apply the candidate to VPP; the result is saved and survive
     cancel("Roll back the pending confirmed commit now"), vc_commit_cancel();
 }
 validate("Check the candidate with vppcfg (syntax and against the running VPP) without applying it"), vc_validate();
-abort("Discard all uncommitted changes and return to exec mode"), vc_abort();
+abort("Discard all uncommitted changes and return to exec mode"), vc_abort("exec");
 end("Return to exec mode (refused while there are uncommitted changes)"), vc_end();

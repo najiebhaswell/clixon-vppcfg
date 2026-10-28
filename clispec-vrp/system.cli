@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: system view (prompt "[~BR]", '*' when there are uncommitted changes).
+CLICON_MODE="system";
+CLICON_PROMPT="[~%H]";
+CLICON_PLUGIN="cli_vppcfg";
+
+interface("Enter an interface view, or create an Eth-Trunk, LoopBack or sub-interface") {
+    (<ifname:string vc_expand_ifs("new", "vrp")>("Interface name")|<ifname:string>("New interface: Eth-TrunkN, LoopBackN, or <interface>.<number> for a sub-interface")), vc_if_enter("vrp");
+    Eth-Trunk("Eth-Trunk (link aggregation) interface") <trunk:uint16 range[0:1023]>("Eth-Trunk number"), vc_if_enter("vrp");
+    LoopBack("Loopback interface") <lbnum:uint16 range[0:1023]>("LoopBack number"), vc_if_enter("vrp");
+}
+undo("Undo a command") interface("Delete an Eth-Trunk, LoopBack or sub-interface, or clear the configuration of a physical interface") (<ifname:string vc_expand_ifs("", "vrp")>("Interface name")|<ifname:string>("Interface name")), vc_no_interface();
+quit("Return to the user view (refused while there are uncommitted changes)"), vc_end("user");

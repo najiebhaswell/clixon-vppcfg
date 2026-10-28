@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: physical interface view (prompt "[~BR-cx5-0]").
+CLICON_MODE="vrp-if";
+CLICON_PROMPT="[~%H-if]";
+CLICON_PLUGIN="cli_vppcfg";
+
+eth-trunk("Add this interface to an Eth-Trunk; it must not have its own IP or lcp configuration") <trunk:uint16 range[0:1023]>("Eth-Trunk number"), vc_join_trunk("add");
+mac-address("Override the MAC address (default: the NIC's burned-in address)") <mac:macaddr>("H-H-H as xx:xx:xx:xx:xx:xx"), vc_set_leaf("mac", "mac");
+shutdown("Administratively disable the interface"), vc_set_leaf("state", "=down");
+l2xc("Cross-connect all frames to another interface at layer 2 (VPP feature, no IP on this interface)") (<ifname:string vc_expand_ifs("", "vrp")>("Target interface")|<ifname:string>("Target interface")), vc_set_leaf("l2xc", "ifname");
+sflow("sFlow") enable("Enable sFlow sampling on this interface"), vc_set_leaf("sflow", "=true");
+undo("Undo a command") {
+    eth-trunk("Remove this interface from its Eth-Trunk"), vc_join_trunk("del");
+    mac-address("Revert to the NIC's burned-in MAC address"), vc_del_leaf("mac");
+    shutdown("Administratively enable the interface"), vc_del_leaf("state");
+    l2xc("Remove the layer 2 cross-connect"), vc_del_leaf("l2xc");
+    sflow("Disable sFlow sampling"), vc_del_leaf("sflow");
+}

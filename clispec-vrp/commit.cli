@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: two-stage commit, available in the system and interface views.
+CLICON_MODE="system:vrp-if:vrp-subif:vrp-loop:vrp-trunk";
+CLICON_PLUGIN="cli_vppcfg";
+
+commit("Commit the candidate: validate with vppcfg and apply to VPP; the result survives reboots"), vc_commit(); {
+    trial("Commit for a trial period; rolls back automatically unless confirmed with 'commit'") <seconds:uint32 range[60:7200]>("Trial period in seconds (60-7200)"), vc_commit();
+}
+abort("Discard uncommitted changes and return to the user view"), vc_abort("user"); {
+    trial("Cancel the pending trial commit and roll back now"), vc_commit_cancel();
+}
+clear("Clear") configuration("Configuration") candidate("Discard uncommitted changes and stay in the current view"), vc_abort();
+return("Return to the user view (refused while there are uncommitted changes)"), vc_end("user");
+display("Display information") this("Candidate configuration of the current view"), vc_display_this("vrp");

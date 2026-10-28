@@ -9,12 +9,16 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
   clixon-vppcfg apply <cfg.xml>          write /etc/vpp/vppcfg.yaml, vppcfg apply, regenerate the boot file
   clixon-vppcfg import <vppcfg.yaml>     print a Clixon XML datastore from vppcfg.yaml (initial migration)
   clixon-vppcfg render <cfg.xml>         print the rendered YAML (debugging)
-  clixon-vppcfg show-config <cfg.xml>    show the configuration in Cisco style
-  clixon-vppcfg diff <a.xml> <b.xml>     Cisco-style unified diff from a to b
+  clixon-vppcfg show-config <cfg.xml> [--style cisco|vrp] [--if NAME]
+                                         show the configuration (optionally one interface)
+  clixon-vppcfg diff <a.xml> <b.xml> [--style cisco|vrp]
+                                         unified diff of the rendered configuration from a to b
   clixon-vppcfg changed <a.xml> <b.xml>  exit 1 if a and b differ, 0 if identical
-  clixon-vppcfg ip-brief                 summary of VPP interfaces and their addresses
+  clixon-vppcfg ip-brief [--style cisco|vrp]
+                                         summary of VPP interfaces and their addresses
 """
 import difflib
+import ipaddress
 import os
 import re
 import shutil
@@ -367,16 +371,131 @@ def cisco_lines(cfg):
     return out
 
 
-def cmd_show_config(xml_path):
-    lines = cisco_lines(xml_to_cfg(xml_path))
-    print("\n".join(lines) if lines else "! (no interface configuration)")
+def vrp_name(name):
+    """VPP name -> Huawei VRP alias: BondEthernetN -> Eth-TrunkN, loopN -> LoopBackN."""
+    m = re.match(r"^BondEthernet(\d+)(\..*)?$", name)
+    if m:
+        return f"Eth-Trunk{m.group(1)}{m.group(2) or ''}"
+    m = re.match(r"^loop(\d+)$", name)
+    return f"LoopBack{m.group(1)}" if m else name
 
 
-def cmd_diff(a_path, b_path):
-    a = cisco_lines(xml_to_cfg(a_path))
-    b = cisco_lines(xml_to_cfg(b_path))
+VRP_MODE = {"lacp": "lacp-static", "xor": "manual load-balance", "active-backup": "active-backup",
+            "round-robin": "round-robin", "broadcast": "broadcast"}
+VRP_LB = {"l2": "src-dst-mac", "l23": "src-dst-ip", "l34": "src-dst-ip-port"}
+
+
+def vrp_lines(cfg, only=None):
+    """Render the configuration Huawei VRP style; only = VPP name of one interface."""
+    out = []
+    bonds = cfg.get("bondethernets", {})
+    ifs = cfg.get("interfaces", {})
+    member_of = {m: name for name, b in bonds.items() for m in b.get("interfaces", [])}
+
+    def l3(body, indent=" "):
+        if "mac" in body:
+            out.append(f"{indent}mac-address {body['mac']}")
+        if "mtu" in body:
+            out.append(f"{indent}mtu {body['mtu']}")
+        v4 = [a for a in body.get("addresses", []) if ":" not in a]
+        v6 = [a for a in body.get("addresses", []) if ":" in a]
+        for i, a in enumerate(v4):
+            ip, plen = a.split("/")
+            mask = ipaddress.IPv4Network(f"0.0.0.0/{plen}").netmask
+            out.append(f"{indent}ip address {ip} {mask}" + (" sub" if i else ""))
+        if "unnumbered" in body:
+            out.append(f"{indent}ip address unnumbered interface {vrp_name(body['unnumbered'])}")
+        if v6:
+            out.append(f"{indent}ipv6 enable")
+            for a in v6:
+                out.append(f"{indent}ipv6 address {a}")
+        if "lcp" in body:
+            out.append(f"{indent}lcp {body['lcp']}")
+        if "l2xc" in body:
+            out.append(f"{indent}l2xc {vrp_name(body['l2xc'])}")
+        if body.get("mpls"):
+            out.append(f"{indent}mpls")
+        if body.get("sflow"):
+            out.append(f"{indent}sflow enable")
+        if body.get("state") == "down":
+            out.append(f"{indent}shutdown")
+
+    for name in sorted(set(bonds) | set(ifs), key=natural_key):
+        body = ifs.get(name, {})
+        if only in (None, name):
+            out += ["#", f"interface {vrp_name(name)}"]
+            b = bonds.get(name)
+            desc = body.get("description") or (b or {}).get("description")
+            if desc:
+                out.append(f" description {desc}")
+            if b is not None:
+                if "mode" in b:
+                    out.append(f" mode {VRP_MODE[b['mode']]}")
+                if "load-balance" in b:
+                    out.append(f" load-balance {VRP_LB[b['load-balance']]}")
+            if name in member_of:
+                out.append(f" eth-trunk {member_of[name][len('BondEthernet'):]}")
+            l3({k: v for k, v in body.items() if k != "description"})
+        for sid, sub in body.get("sub-interfaces", {}).items():
+            sname = f"{name}.{sid}"
+            if only not in (None, sname):
+                continue
+            out += ["#", f"interface {vrp_name(sname)}"]
+            if "description" in sub:
+                out.append(f" description {sub['description']}")
+            e = sub.get("encapsulation", {})
+            outer = e.get("dot1q", e.get("dot1ad"))
+            if e and "inner-dot1q" in e:
+                out.append(f" qinq termination pe-vid {outer} ce-vid {e['inner-dot1q']}"
+                           + (" dot1ad" if "dot1ad" in e else ""))
+            elif e:
+                if e.get("exact-match"):
+                    out.append(f" {'dot1ad' if 'dot1ad' in e else 'dot1q'} termination vid {outer}")
+                else:
+                    out.append(f" vlan-type {'dot1ad' if 'dot1ad' in e else 'dot1q'} {outer}")
+            l3({k: v for k, v in sub.items() if k != "description"})
+    for name, body in cfg.get("loopbacks", {}).items():
+        if only not in (None, name):
+            continue
+        out += ["#", f"interface {vrp_name(name)}"]
+        if "description" in body:
+            out.append(f" description {body['description']}")
+        l3({k: v for k, v in body.items() if k != "description"})
+    if only is None:
+        out += ["#", "return"]
+    elif out:
+        out += ["#", "return"]
+    return out
+
+
+def render_lines(cfg, style, only=None):
+    if style == "vrp":
+        return vrp_lines(cfg, only)
+    lines = cisco_lines(cfg)
+    if only is None:
+        return lines
+    # Cisco: keep the block of one interface
+    out, keep = [], False
+    for line in lines:
+        if line.startswith("interface "):
+            keep = line == f"interface {only}"
+        if keep:
+            out.append(line)
+    return out
+
+
+def cmd_show_config(xml_path, style="cisco", only=None):
+    lines = render_lines(xml_to_cfg(xml_path), style, only)
+    empty = "# (no interface configuration)" if style == "vrp" else "! (no interface configuration)"
+    print("\n".join(lines) if lines else empty)
+
+
+def cmd_diff(a_path, b_path, style="cisco"):
+    a = render_lines(xml_to_cfg(a_path), style)
+    b = render_lines(xml_to_cfg(b_path), style)
     diff = list(difflib.unified_diff(a, b, "running", "candidate", lineterm="", n=2))
-    print("\n".join(diff[2:]) if diff else "% No uncommitted changes.")
+    none = "Info: No uncommitted configuration." if style == "vrp" else "% No uncommitted changes."
+    print("\n".join(diff[2:]) if diff else none)
 
 
 def cmd_changed(a_path, b_path):
@@ -384,7 +503,7 @@ def cmd_changed(a_path, b_path):
     sys.exit(1 if xml_to_cfg(a_path) != xml_to_cfg(b_path) else 0)
 
 
-def cmd_ip_brief():
+def cmd_ip_brief(style="cisco"):
     r = subprocess.run([VPPCTL, "show", "interface", "address"], capture_output=True, text=True)
     if r.returncode != 0:
         die("vppctl failed: " + (r.stderr or r.stdout))
@@ -397,6 +516,14 @@ def cmd_ip_brief():
         elif cur and line.strip().startswith("L3 "):
             cur[2].append(line.strip()[3:])
     rows = [x for x in rows if x[0] != "local0" and not x[0].startswith("tap")]
+    rename = vrp_name if style == "vrp" else (lambda n: n)
+    if style == "vrp":
+        print(f"{'Interface':<24} {'IP Address/Mask':<34} Physical")
+        for name, state, addrs in sorted(rows, key=lambda x: natural_key(x[0])):
+            print(f"{rename(name):<24} {addrs[0] if addrs else 'unassigned':<34} {'up' if state == 'up' else '*down'}")
+            for a in addrs[1:]:
+                print(f"{'':<24} {a}")
+        return
     print(f"{'Interface':<24} {'Admin':<6} Address")
     for name, state, addrs in sorted(rows, key=lambda x: natural_key(x[0])):
         print(f"{name:<24} {state:<6} {addrs[0] if addrs else 'unassigned'}")
@@ -404,10 +531,23 @@ def cmd_ip_brief():
             print(f"{'':<24} {'':<6} {a}")
 
 
+def pop_opt(args, name, default=None):
+    """Remove "--name value" from args and return value."""
+    if name in args:
+        i = args.index(name)
+        if i + 1 < len(args):
+            value = args[i + 1]
+            del args[i:i + 2]
+            return value
+    return default
+
+
 def main():
     if len(sys.argv) < 2:
         die(__doc__, 2)
     verb, args = sys.argv[1], sys.argv[2:]
+    style = pop_opt(args, "--style", "cisco")
+    only = pop_opt(args, "--if")
     if verb == "validate" and len(args) == 1:
         cmd_validate(args[0])
     elif verb == "apply" and len(args) == 1:
@@ -421,13 +561,13 @@ def main():
     elif verb == "render" and len(args) == 1:
         sys.stdout.write(render_yaml(xml_to_cfg(args[0])))
     elif verb == "show-config" and len(args) == 1:
-        cmd_show_config(args[0])
+        cmd_show_config(args[0], style, only)
     elif verb == "diff" and len(args) == 2:
-        cmd_diff(*args)
+        cmd_diff(*args, style=style)
     elif verb == "changed" and len(args) == 2:
         cmd_changed(*args)
     elif verb == "ip-brief" and not args:
-        cmd_ip_brief()
+        cmd_ip_brief(style)
     else:
         die(__doc__, 2)
 

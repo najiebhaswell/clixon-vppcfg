@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: LoopBack view (only the shared interface commands apply).
+CLICON_MODE="vrp-loop";
+CLICON_PROMPT="[~%H-LoopBack]";
+CLICON_PLUGIN="cli_vppcfg";

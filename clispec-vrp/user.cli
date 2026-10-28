@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: user view (prompt "<BR>").
+CLICON_MODE="user";
+CLICON_PROMPT="<%H>";
+CLICON_PLUGIN="cli_vppcfg";
+
+system-view("Enter the system view; changes go to the shared candidate until 'commit'"), vc_configure("system");
+quit("Exit the CLI"), cli_quit();

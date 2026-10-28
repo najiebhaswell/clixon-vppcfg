@@ -8,6 +8,10 @@
  * on "commit" (backend plugin -> vppcfg). Operational "show" commands run vppctl/birdc
  * directly, without a shell.
  *
+ * The same plugin serves two CLI styles with separate clispec directories: Cisco style ("rtr",
+ * clispec/) and Huawei VRP style ("vrp", clispec-vrp/). VRP aliases Eth-TrunkN and LoopBackN
+ * are mapped to the VPP names BondEthernetN and loopN.
+ *
  * The interface name selects the table that is edited:
  *   loopN          -> /loopbacks/loopback
  *   BondEthernetN  -> /bondethernets/bondethernet (members, mode) + /interfaces/interface (L3)
@@ -20,6 +24,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <arpa/inet.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -34,7 +40,8 @@
 
 enum iftype { IF_PHY, IF_SUB, IF_LOOP, IF_BOND };
 
-static char _ifname[64]; /* current interface in the interface configuration modes */
+static char _ifname[64]; /* current interface (VPP name) in the interface configuration modes */
+static int  _vrp;        /* 1 when this CLI session uses the Huawei VRP style */
 
 static int
 all_digits(const char *s)
@@ -81,6 +88,49 @@ name_ok(const char *s)
     return 1;
 }
 
+/*! Map a VRP alias to the VPP name: Eth-TrunkN -> BondEthernetN, LoopBackN -> loopN
+ * (case-insensitive, keeps a ".N" sub-interface suffix). Other names are copied. */
+static void
+canon_ifname(const char *in,
+             char       *out,
+             size_t      len)
+{
+    if (strncasecmp(in, "eth-trunk", 9) == 0 && isdigit((unsigned char)in[9]))
+        snprintf(out, len, "BondEthernet%s", in + 9);
+    else if (strncasecmp(in, "loopback", 8) == 0 && isdigit((unsigned char)in[8]))
+        snprintf(out, len, "loop%s", in + 8);
+    else
+        snprintf(out, len, "%s", in);
+}
+
+/*! Map a VPP name to its VRP alias (inverse of canon_ifname). */
+static void
+vrp_ifname(const char *in,
+           char       *out,
+           size_t      len)
+{
+    if (strncmp(in, "BondEthernet", 12) == 0 && isdigit((unsigned char)in[12]))
+        snprintf(out, len, "Eth-Trunk%s", in + 12);
+    else if (strncmp(in, "loop", 4) == 0 && isdigit((unsigned char)in[4]))
+        snprintf(out, len, "LoopBack%s", in + 4);
+    else
+        snprintf(out, len, "%s", in);
+}
+
+/*! Replace *val by its VPP name when the leaf holds an interface name. */
+static void
+canon_leaf_value(const char *leaf,
+                 char      **val)
+{
+    char buf[128];
+
+    if (strcmp(leaf, "unnumbered") != 0 && strcmp(leaf, "l2xc") != 0 && strcmp(leaf, "interface") != 0)
+        return;
+    canon_ifname(*val, buf, sizeof(buf));
+    free(*val);
+    *val = strdup(buf);
+}
+
 static void
 xesc(cbuf       *cb,
      const char *s)
@@ -106,7 +156,7 @@ user_error(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
-    cligen_output(stdout, "%% %s\n", msg);
+    cligen_output(stdout, _vrp ? "Error: %s\n" : "%% %s\n", msg);
     return 0;
 }
 
@@ -297,21 +347,34 @@ check_phy_exists(const char *name)
 }
 
 /* interface <ifname>: select/create an interface and enter the mode for its type, so that '?'
- * only lists commands that apply: configure-if (physical), configure-subif, configure-loop,
- * configure-bond. */
+ * only lists commands that apply. Cisco: configure-if (physical), configure-subif,
+ * configure-loop, configure-bond. VRP (argv = "vrp"): vrp-if, vrp-subif, vrp-loop, vrp-trunk.
+ * VRP also accepts "interface Eth-Trunk <n>" and "interface LoopBack <n>" (variables trunk/lbnum). */
 int
 vc_if_enter(clixon_handle h,
             cvec         *cvv,
             cvec         *argv)
 {
-    char  parent[64];
-    char  subid[16];
-    char       *name = cvec_find_str(cvv, "ifname");
+    char        parent[64];
+    char        subid[16];
+    char        name[64];
+    char       *in = cvec_find_str(cvv, "ifname");
+    const char *style = arg_str(argv, 0);
+    int         vrp = style != NULL && strcmp(style, "vrp") == 0;
+    cg_var     *cv;
     const char *mode;
     int         ret;
 
+    if ((cv = cvec_find(cvv, "trunk")) != NULL)
+        snprintf(name, sizeof(name), "BondEthernet%u", cv_uint16_get(cv));
+    else if ((cv = cvec_find(cvv, "lbnum")) != NULL)
+        snprintf(name, sizeof(name), "loop%u", cv_uint16_get(cv));
+    else if (in != NULL)
+        canon_ifname(in, name, sizeof(name));
+    else
+        name[0] = '\0';
     if (!name_ok(name))
-        return user_error("Invalid interface name: %s", name ? name : "");
+        return user_error("Invalid interface name: %s", in ? in : "");
     if ((ret = check_phy_exists(name)) != 0)
         return ret < 0 ? -1 : 0;
     if (if_classify(name, parent, sizeof(parent), subid, sizeof(subid)) == IF_BOND &&
@@ -321,10 +384,10 @@ vc_if_enter(clixon_handle h,
         return -1;
     snprintf(_ifname, sizeof(_ifname), "%s", name);
     switch (if_classify(name, parent, sizeof(parent), subid, sizeof(subid))) {
-    case IF_SUB:  mode = "configure-subif"; break;
-    case IF_LOOP: mode = "configure-loop"; break;
-    case IF_BOND: mode = "configure-bond"; break;
-    default:      mode = "configure-if"; break;
+    case IF_SUB:  mode = vrp ? "vrp-subif" : "configure-subif"; break;
+    case IF_LOOP: mode = vrp ? "vrp-loop" : "configure-loop"; break;
+    case IF_BOND: mode = vrp ? "vrp-trunk" : "configure-bond"; break;
+    default:      mode = vrp ? "vrp-if" : "configure-if"; break;
     }
     return cli_set_syntax_mode(h, (char *)mode) < 0 ? -1 : 0;
 }
@@ -337,10 +400,12 @@ vc_no_interface(clixon_handle h,
 {
     char  parent[64];
     char  subid[16];
-    char *name = cvec_find_str(cvv, "ifname");
+    char  name[64];
+    char *in = cvec_find_str(cvv, "ifname");
 
+    canon_ifname(in ? in : "", name, sizeof(name));
     if (!name_ok(name))
-        return user_error("Invalid interface name: %s", name ? name : "");
+        return user_error("Invalid interface name: %s", in ? in : "");
     if (if_classify(name, parent, sizeof(parent), subid, sizeof(subid)) == IF_BOND &&
         edit_if(h, name, 1, "", "remove") < 0)
         return -1;
@@ -363,6 +428,7 @@ vc_set_leaf(clixon_handle h,
         return 0;
     if ((val = var_value(cvv, arg_str(argv, 1))) == NULL)
         return user_error("Missing value for %s", leaf);
+    canon_leaf_value(leaf, &val);
     cb = cbuf_new();
     cprintf(cb, "<%s>", leaf);
     xesc(cb, val);
@@ -406,6 +472,7 @@ leaflist_op(clixon_handle h,
         return 0;
     if ((val = var_value(cvv, arg_str(argv, 1))) == NULL)
         return user_error("Missing value for %s", leaf);
+    canon_leaf_value(leaf, &val);
     cb = cbuf_new();
     cprintf(cb, "<%s%s>", leaf, remove ? " nc:operation=\"remove\"" : "");
     xesc(cb, val);
@@ -432,7 +499,8 @@ vc_del_ll(clixon_handle h,
     return leaflist_op(h, cvv, argv, 1);
 }
 
-/* encapsulation dot1q|dot1ad <outer> [inner-dot1q <inner>] [exact-match]: argv = ("dot1q"|"dot1ad") */
+/* encapsulation dot1q|dot1ad <outer> [inner-dot1q <inner>] [exact-match]: argv = ("dot1q"|"dot1ad"
+ * [, "exact"]). "exact" forces exact-match (VRP "dot1q termination" / "qinq termination"). */
 int
 vc_encap(clixon_handle h,
          cvec         *cvv,
@@ -451,7 +519,7 @@ vc_encap(clixon_handle h,
     if (inner)
         snprintf(xml + strlen(xml), sizeof(xml) - strlen(xml),
                  "<inner-dot1q>%u</inner-dot1q>", cv_uint16_get(inner));
-    if (cvec_find(cvv, "exact"))
+    if (cvec_find(cvv, "exact") || (arg_str(argv, 1) && strcmp(arg_str(argv, 1), "exact") == 0))
         snprintf(xml + strlen(xml), sizeof(xml) - strlen(xml), "<exact-match>true</exact-match>");
     snprintf(xml + strlen(xml), sizeof(xml) - strlen(xml), "</encapsulation>");
     return edit_if(h, _ifname, 0, xml, NULL);
@@ -537,29 +605,46 @@ has_changes(clixon_handle h)
     return st == 1 ? 1 : (st == 0 ? 0 : -1);
 }
 
-/* configure [terminal]: enter configuration mode. The candidate is shared by all sessions, so
- * warn if it already holds changes (from another session, or left over from a rolled-back
- * confirmed commit: Clixon's rollback restores running but does not clean the candidate). */
+/* configure [terminal] / system-view: enter configuration mode (argv = target mode, default
+ * "configure"; "system" selects the VRP style). The candidate is shared by all sessions, so warn
+ * if it already holds changes (from another session, or left over from a rolled-back confirmed
+ * commit: Clixon's rollback restores running but does not clean the candidate). */
 int
 vc_configure(clixon_handle h,
              cvec         *cvv,
              cvec         *argv)
 {
+    const char *target = arg_str(argv, 0) ? arg_str(argv, 0) : "configure";
+
+    _vrp = strcmp(target, "system") == 0;
     if (has_changes(h) == 1)
-        cligen_output(stdout, "%% Warning: the candidate already contains uncommitted changes\n"
-                      "%% (from another session, or left over from a rolled-back confirmed commit).\n"
-                      "%% Review with 'show configuration diff'; discard with 'abort' if unwanted.\n");
-    return cli_set_syntax_mode(h, "configure") < 0 ? -1 : 0;
+        cligen_output(stdout, "%s the candidate already contains uncommitted changes\n"
+                      "%s (from another session, or left over from a rolled-back confirmed commit).\n"
+                      "%s Review with '%s'; discard with '%s' if unwanted.\n",
+                      _vrp ? "Warning:" : "% Warning:", _vrp ? "        " : "%", _vrp ? "        " : "%",
+                      _vrp ? "display configuration candidate changes" : "show configuration diff",
+                      _vrp ? "clear configuration candidate" : "abort");
+    return cli_set_syntax_mode(h, (char *)target) < 0 ? -1 : 0;
 }
 
-/* show running-config | candidate-config: argv = (db) */
+/*! Helper style argument for argv index i: "vrp" or "cisco". */
+static char *
+style_arg(cvec *argv,
+          int   i)
+{
+    const char *s = arg_str(argv, i);
+
+    return (char *)(s != NULL && strcmp(s, "vrp") == 0 ? "vrp" : "cisco");
+}
+
+/* show running-config | candidate-config: argv = (db [, "vrp"]) */
 int
 vc_show_config(clixon_handle h,
                cvec         *cvv,
                cvec         *argv)
 {
     char  path[] = "/tmp/rtr-config-XXXXXX";
-    char *args[] = {HELPER, "show-config", path, NULL};
+    char *args[] = {HELPER, "show-config", path, "--style", style_arg(argv, 1), NULL};
 
     if (dump_db(h, arg_str(argv, 0), path) < 0)
         return -1;
@@ -568,7 +653,7 @@ vc_show_config(clixon_handle h,
     return 0;
 }
 
-/* show configuration diff */
+/* show configuration diff: argv = ([ "vrp" ]) */
 int
 vc_show_diff(clixon_handle h,
              cvec         *cvv,
@@ -576,7 +661,7 @@ vc_show_diff(clixon_handle h,
 {
     char  a[] = "/tmp/rtr-running-XXXXXX";
     char  b[] = "/tmp/rtr-candidate-XXXXXX";
-    char *args[] = {HELPER, "diff", a, b, NULL};
+    char *args[] = {HELPER, "diff", a, b, "--style", style_arg(argv, 0), NULL};
 
     if (dump_db(h, "running", a) < 0)
         return -1;
@@ -590,20 +675,21 @@ vc_show_diff(clixon_handle h,
     return 0;
 }
 
-/* show ip interface brief */
+/* show ip interface brief: argv = ([ "vrp" ]) */
 int
 vc_ip_brief(clixon_handle h,
             cvec         *cvv,
             cvec         *argv)
 {
-    char *args[] = {HELPER, "ip-brief", NULL};
+    char *args[] = {HELPER, "ip-brief", "--style", style_arg(argv, 0), NULL};
 
     run_prog(args, 0);
     return 0;
 }
 
 /* Run an operational command: argv = program, arguments...; "$var" is replaced by the CLI
- * variable value (skipped when an optional variable was not given). */
+ * variable value, "@var" by the value mapped to a VPP interface name (both skipped when an
+ * optional variable was not given). */
 int
 vc_run(clixon_handle h,
        cvec         *cvv,
@@ -615,12 +701,19 @@ vc_run(clixon_handle h,
 
     for (i = 0; i < cvec_len(argv) && n < 31; i++) {
         const char *a = cv_string_get(cvec_i(argv, i));
-        if (a[0] == '$') {
+        if (a[0] == '$' || a[0] == '@') {
             cg_var *cv = cvec_find(cvv, a + 1);
+            char    buf[128];
             if (cv == NULL)
                 continue;
             if ((args[n] = cv2str_dup(cv)) == NULL)
                 goto fail;
+            if (a[0] == '@') {
+                canon_ifname(args[n], buf, sizeof(buf));
+                free(args[n]);
+                if ((args[n] = strdup(buf)) == NULL)
+                    goto fail;
+            }
         }
         else if ((args[n] = strdup(a)) == NULL)
             goto fail;
@@ -666,22 +759,28 @@ rpc_commit_persist_id(clixon_handle h)
     return retval;
 }
 
-/* commit [confirmed <minutes>] */
+/* commit [confirmed <minutes>] (Cisco) | commit [trial <seconds>] (VRP) */
 int
 vc_commit(clixon_handle h,
           cvec         *cvv,
           cvec         *argv)
 {
     cg_var  *mv = cvec_find(cvv, "minutes");
-    int      confirmed = cvec_find(cvv, "confirmed") != NULL;
-    uint32_t minutes = mv ? cv_uint32_get(mv) : 0;
+    cg_var  *sv = cvec_find(cvv, "seconds");
+    int      confirmed = cvec_find(cvv, "confirmed") != NULL || sv != NULL;
+    uint32_t seconds = sv ? cv_uint32_get(sv) : (mv ? cv_uint32_get(mv) * 60 : 0);
     int      ret;
 
     if (confirmed) {
-        if (clicon_rpc_commit(h, 1, 0, minutes * 60, CONFIRM_PERSIST, CONFIRM_PERSIST) < 1)
+        if (clicon_rpc_commit(h, 1, 0, seconds, CONFIRM_PERSIST, CONFIRM_PERSIST) < 1)
             return 0; /* reason already printed by vc_errmsg */
-        cligen_output(stdout, "%% Commit is provisional. Run 'commit' within %u minute(s) (from any "
-                      "session) to confirm; otherwise the configuration rolls back automatically.\n", minutes);
+        if (_vrp)
+            cligen_output(stdout, "Info: Trial commit for %u seconds. Run 'commit' (from any session) to "
+                          "confirm; otherwise the configuration rolls back automatically.\n", seconds);
+        else
+            cligen_output(stdout, "%% Commit is provisional. Run 'commit' within %u minute(s) (from any "
+                          "session) to confirm; otherwise the configuration rolls back automatically.\n",
+                          seconds / 60);
         return 0;
     }
     if ((ret = rpc_commit_persist_id(h)) < 1)
@@ -690,11 +789,13 @@ vc_commit(clixon_handle h,
      * apply any remaining changes with a second commit. */
     if (has_changes(h) == 1 && (ret = rpc_commit_persist_id(h)) < 1)
         return ret < 0 ? -1 : 0;
-    cligen_output(stdout, "%% Commit complete.\n");
+    if (!_vrp)
+        cligen_output(stdout, "%% Commit complete.\n");
     return 0;
 }
 
-/* commit cancel: cancel the pending confirmed commit (roll back now) */
+/* commit cancel / abort trial: cancel the pending confirmed commit (roll back now). The candidate
+ * is reset to the restored running configuration as well; Clixon's rollback leaves it unchanged. */
 int
 vc_commit_cancel(clixon_handle h,
                  cvec         *cvv,
@@ -702,7 +803,10 @@ vc_commit_cancel(clixon_handle h,
 {
     if (clicon_rpc_commit(h, 0, 1, 0, NULL, CONFIRM_PERSIST) < 1)
         return 0;
-    cligen_output(stdout, "%% Confirmed commit cancelled; configuration rolled back.\n");
+    if (clicon_rpc_discard_changes(h) < 0)
+        return -1;
+    cligen_output(stdout, _vrp ? "Info: Trial commit aborted; configuration rolled back.\n"
+                  : "%% Confirmed commit cancelled; configuration rolled back.\n");
     return 0;
 }
 
@@ -718,46 +822,259 @@ vc_validate(clixon_handle h,
     return 0;
 }
 
-/* abort: discard candidate changes and return to exec mode */
+/* abort / clear configuration candidate: discard candidate changes; argv = target mode
+ * ("exec", "user") or none to stay in the current view. */
 int
 vc_abort(clixon_handle h,
          cvec         *cvv,
          cvec         *argv)
 {
+    const char *target = arg_str(argv, 0);
+
     if (clicon_rpc_discard_changes(h) < 0)
         return -1;
+    if (!_vrp)
+        cligen_output(stdout, "%% Uncommitted changes discarded.\n");
+    if (target == NULL)
+        return 0;
     _ifname[0] = '\0';
-    cligen_output(stdout, "%% Uncommitted changes discarded.\n");
-    return cli_set_syntax_mode(h, "exec") < 0 ? -1 : 0;
+    return cli_set_syntax_mode(h, (char *)target) < 0 ? -1 : 0;
 }
 
-/* end: return to exec mode; refused while there are uncommitted changes */
+/* end / return / quit from system view: leave configuration mode (argv = target mode, default
+ * "exec"); refused while there are uncommitted changes */
 int
 vc_end(clixon_handle h,
        cvec         *cvv,
        cvec         *argv)
 {
-    int ch = has_changes(h);
+    const char *target = arg_str(argv, 0) ? arg_str(argv, 0) : "exec";
+    int         ch = has_changes(h);
 
     if (ch < 0)
         return -1;
     if (ch == 1) {
-        cligen_output(stdout, "%% There are uncommitted changes (see 'show configuration diff').\n"
-                      "%% Use 'commit' to apply them or 'abort' to discard them.\n");
+        if (_vrp)
+            cligen_output(stdout, "Error: Uncommitted configurations found (see 'display configuration "
+                          "candidate changes').\n       Run 'commit' to apply them or 'abort' to discard them.\n");
+        else
+            cligen_output(stdout, "%% There are uncommitted changes (see 'show configuration diff').\n"
+                          "%% Use 'commit' to apply them or 'abort' to discard them.\n");
         return 0;
     }
     _ifname[0] = '\0';
-    return cli_set_syntax_mode(h, "exec") < 0 ? -1 : 0;
+    return cli_set_syntax_mode(h, (char *)target) < 0 ? -1 : 0;
 }
 
-/* exit from an interface mode to global configuration mode */
+/* exit/quit from an interface mode to global configuration (argv = target mode, default
+ * "configure"; VRP uses "system") */
 int
 vc_if_exit(clixon_handle h,
            cvec         *cvv,
            cvec         *argv)
 {
+    const char *target = arg_str(argv, 0) ? arg_str(argv, 0) : "configure";
+
     _ifname[0] = '\0';
-    return cli_set_syntax_mode(h, "configure") < 0 ? -1 : 0;
+    return cli_set_syntax_mode(h, (char *)target) < 0 ? -1 : 0;
+}
+
+/*! Prefix length from a dotted netmask, -1 if not a contiguous mask. */
+static int
+mask_to_len(const char *mask)
+{
+    struct in_addr a;
+    uint32_t       m;
+    int            len = 0;
+
+    if (inet_pton(AF_INET, mask, &a) != 1)
+        return -1;
+    m = ntohl(a.s_addr);
+    while (m & 0x80000000u) {
+        len++;
+        m <<= 1;
+    }
+    return m == 0 ? len : -1;
+}
+
+/* ip address <ip> <mask|len> [sub] / ipv6 address <ip6> <len6> (VRP): argv = ("add"|"del").
+ * Variables: ip + (mask | len) for IPv4, ip6 + len6 for IPv6. */
+int
+vc_addr(clixon_handle h,
+        cvec         *cvv,
+        cvec         *argv)
+{
+    const char *op = arg_str(argv, 0);
+    cg_var     *ip = cvec_find(cvv, "ip") ? cvec_find(cvv, "ip") : cvec_find(cvv, "ip6");
+    cg_var     *mask = cvec_find(cvv, "mask");
+    cg_var     *len = cvec_find(cvv, "len") ? cvec_find(cvv, "len") : cvec_find(cvv, "len6");
+    char       *ips;
+    char       *ms;
+    char        inner[192];
+    int         plen = -1;
+    int         bondtbl;
+
+    if (leaf_context("address", argv, 99, &bondtbl) < 0)
+        return 0;
+    if (ip == NULL || (mask == NULL && len == NULL))
+        return user_error("Missing address or mask");
+    if (len != NULL)
+        plen = cv_uint8_get(len);
+    else {
+        ms = cv2str_dup(mask);
+        plen = mask_to_len(ms);
+        free(ms);
+        if (plen < 0)
+            return user_error("Invalid netmask (it must be contiguous, e.g. 255.255.255.252)");
+    }
+    ips = cv2str_dup(ip);
+    snprintf(inner, sizeof(inner), "<address%s>%s/%d</address>",
+             op != NULL && strcmp(op, "del") == 0 ? " nc:operation=\"remove\"" : "", ips, plen);
+    free(ips);
+    return edit_if(h, _ifname, 0, inner, NULL);
+}
+
+/*! Bond that has ifname as member in the candidate, written to bond; 0 found, -1 not found. */
+static int
+trunk_of(clixon_handle h,
+         const char   *ifname,
+         char         *bond,
+         size_t        len)
+{
+    cxobj  *xt = NULL;
+    cxobj **vec = NULL;
+    cxobj  *x;
+    cvec   *nsc;
+    size_t  n;
+    size_t  i;
+    int     found = -1;
+
+    if (clicon_rpc_get_config(h, NULL, "candidate", "/", NULL, NULL, &xt) < 0 || xt == NULL)
+        return -1;
+    nsc = xml_nsctx_init("vc", NS);
+    if (xpath_vec(xt, nsc, "/vc:bondethernets/vc:bondethernet", &vec, &n) == 0)
+        for (i = 0; i < n && found < 0; i++) {
+            x = NULL;
+            while ((x = xml_child_each(vec[i], x, CX_ELMNT)) != NULL)
+                if (strcmp(xml_name(x), "interface") == 0 && xml_body(x) && strcmp(xml_body(x), ifname) == 0) {
+                    snprintf(bond, len, "%s", xml_find_body(vec[i], "name"));
+                    found = 0;
+                    break;
+                }
+        }
+    free(vec);
+    cvec_free(nsc);
+    xml_free(xt);
+    return found;
+}
+
+/* eth-trunk <n> / undo eth-trunk (VRP, physical interface view): add/remove the current interface
+ * as member of Eth-Trunk<n> (BondEthernet<n>). argv = ("add"|"del"). */
+int
+vc_join_trunk(clixon_handle h,
+              cvec         *cvv,
+              cvec         *argv)
+{
+    char    parent[64];
+    char    subid[16];
+    char    bond[64];
+    cg_var *tv = cvec_find(cvv, "trunk");
+    int     remove = arg_str(argv, 0) && strcmp(arg_str(argv, 0), "del") == 0;
+    cbuf   *cb;
+    int     ret;
+
+    if (if_classify(_ifname, parent, sizeof(parent), subid, sizeof(subid)) != IF_PHY)
+        return user_error("Only a physical interface can be an Eth-Trunk member");
+    if (tv != NULL)
+        snprintf(bond, sizeof(bond), "BondEthernet%u", cv_uint16_get(tv));
+    else if (trunk_of(h, _ifname, bond, sizeof(bond)) < 0)
+        return user_error("%s is not a member of an Eth-Trunk", _ifname);
+    if (!remove && edit_if(h, bond, 0, "", NULL) < 0)
+        return -1;
+    cb = cbuf_new();
+    cprintf(cb, "<interface%s>", remove ? " nc:operation=\"remove\"" : "");
+    xesc(cb, _ifname);
+    cprintf(cb, "</interface>");
+    ret = edit_if(h, bond, 1, cbuf_get(cb), NULL);
+    cbuf_free(cb);
+    return ret;
+}
+
+/* ipv6 enable (VRP): accepted for compatibility; IPv6 is always enabled when an address is set. */
+int
+vc_noop(clixon_handle h,
+        cvec         *cvv,
+        cvec         *argv)
+{
+    return 0;
+}
+
+/* display this: candidate configuration of the current interface, or all of it in system view.
+ * argv = ([ "vrp" ]) */
+int
+vc_display_this(clixon_handle h,
+                cvec         *cvv,
+                cvec         *argv)
+{
+    char  path[] = "/tmp/rtr-this-XXXXXX";
+    char *args[] = {HELPER, "show-config", path, "--style", style_arg(argv, 0), "--if", _ifname, NULL};
+
+    if (_ifname[0] == '\0')
+        args[5] = NULL;
+    if (dump_db(h, "candidate", path) < 0)
+        return -1;
+    run_prog(args, 0);
+    unlink(path);
+    return 0;
+}
+
+/*! @retval 1 candidate differs from running, 0 identical, -1 error. Cheap: no helper process. */
+static int
+dbs_differ(clixon_handle h)
+{
+    cxobj *xr = NULL;
+    cxobj *xc = NULL;
+    cbuf  *cr = cbuf_new();
+    cbuf  *cc = cbuf_new();
+    int    ret = -1;
+
+    if (clicon_rpc_get_config(h, NULL, "running", "/", NULL, NULL, &xr) < 0 ||
+        clicon_rpc_get_config(h, NULL, "candidate", "/", NULL, NULL, &xc) < 0)
+        goto done;
+    clixon_xml2cbuf(cr, xr, 0, 0, NULL, -1, 0);
+    clixon_xml2cbuf(cc, xc, 0, 0, NULL, -1, 0);
+    ret = strcmp(cbuf_get(cr), cbuf_get(cc)) != 0;
+ done:
+    if (xr)
+        xml_free(xr);
+    if (xc)
+        xml_free(xc);
+    cbuf_free(cr);
+    cbuf_free(cc);
+    return ret;
+}
+
+/*! VRP prompt: "[~BR]" in the system view, "[~BR-Eth-Trunk0]" in interface views; '*' instead of
+ * '~' when the candidate has uncommitted changes (as in VRP8 two-stage mode). Other modes keep
+ * the prompt from their clispec. */
+static char *
+vc_prompt(clixon_handle h,
+          char         *mode)
+{
+    char name[80];
+    char buf[160];
+    char mark;
+
+    if (strcmp(mode, "system") != 0 && strncmp(mode, "vrp-", 4) != 0)
+        return NULL;
+    mark = dbs_differ(h) == 1 ? '*' : '~';
+    if (strcmp(mode, "system") == 0)
+        snprintf(buf, sizeof(buf), "[%c%%H]", mark);
+    else {
+        vrp_ifname(_ifname, name, sizeof(name));
+        snprintf(buf, sizeof(buf), "[%c%%H-%s]", mark, name);
+    }
+    return strdup(buf);
 }
 
 /*! Interfaces defined in the candidate datastore (physical, sub-interfaces, loopbacks, bonds).
@@ -881,6 +1198,7 @@ next_index(cvec       *names,
 /*! Tab completion of interface names: VPP interfaces, interfaces only present in the candidate,
  * and (with clispec argument "new") the next free loopN and BondEthernetN names.
  * With argument "phy", only physical interfaces that exist in VPP (bond members).
+ * A second argument "vrp" lists VRP aliases (Eth-TrunkN, LoopBackN).
  * Help texts show the interface type and its configured description. */
 int
 vc_expand_ifs(clixon_handle h,
@@ -899,7 +1217,9 @@ vc_expand_ifs(clixon_handle h,
     char        subid[16];
     char        help[160];
     char        buf[64];
+    char        alias[80];
     int         phy_only = mode != NULL && strcmp(mode, "phy") == 0;
+    int         vrp = arg_str(argv, 1) != NULL && strcmp(arg_str(argv, 1), "vrp") == 0;
 
     vpp_ifnames(vpp);
     candidate_ifnames(h, cand);
@@ -908,19 +1228,25 @@ vc_expand_ifs(clixon_handle h,
         if (phy_only && if_classify(ifn, parent, sizeof(parent), subid, sizeof(subid)) != IF_PHY)
             continue;
         if_help(ifn, 1, candidate_desc(cand, ifn), help, sizeof(help));
-        add_completion(commands, helptexts, ifn, help);
+        if (vrp)
+            vrp_ifname(ifn, alias, sizeof(alias));
+        add_completion(commands, helptexts, vrp ? alias : ifn, help);
     }
     if (!phy_only)
         while ((cv = cvec_each(cand, cv)) != NULL) {
             ifn = cv_name_get(cv);
             if_help(ifn, 0, candidate_desc(cand, ifn), help, sizeof(help));
-            add_completion(commands, helptexts, ifn, help);
+            if (vrp)
+                vrp_ifname(ifn, alias, sizeof(alias));
+            add_completion(commands, helptexts, vrp ? alias : ifn, help);
         }
     if (mode != NULL && strcmp(mode, "new") == 0) {
-        snprintf(buf, sizeof(buf), "loop%d", next_index(commands, "loop"));
+        snprintf(buf, sizeof(buf), "%s%d", vrp ? "LoopBack" : "loop", next_index(commands, vrp ? "LoopBack" : "loop"));
         add_completion(commands, helptexts, buf, "New loopback (created on commit)");
-        snprintf(buf, sizeof(buf), "BondEthernet%d", next_index(commands, "BondEthernet"));
-        add_completion(commands, helptexts, buf, "New bond (LAG), created on commit; add members with 'member'");
+        snprintf(buf, sizeof(buf), "%s%d", vrp ? "Eth-Trunk" : "BondEthernet",
+                 next_index(commands, vrp ? "Eth-Trunk" : "BondEthernet"));
+        add_completion(commands, helptexts, buf, vrp ? "New Eth-Trunk (LAG), created on commit; add members with 'trunkport'"
+                       : "New bond (LAG), created on commit; add members with 'member'");
     }
     cvec_free(vpp);
     cvec_free(cand);
@@ -955,13 +1281,13 @@ vc_errmsg(clixon_handle        h,
             what = "Commit";
         else if (strncmp(format, "Validate", 8) == 0)
             what = "Validation";
-        cligen_output(stdout, "%% %s failed: %s\n", what, msg);
+        cligen_output(stdout, _vrp ? "Error: %s failed: %s\n" : "%% %s failed: %s\n", what, msg);
         return 0;
     }
     va_copy(ap2, ap);
     vsnprintf(buf, sizeof(buf), format, ap2);
     va_end(ap2);
-    cligen_output(stdout, "%% %s\n", buf);
+    cligen_output(stdout, _vrp ? "Error: %s\n" : "%% %s\n", buf);
     return 0;
 }
 
@@ -971,6 +1297,7 @@ static clixon_plugin_api api = {
     .ca_name   = "cli_vppcfg",
     .ca_init   = clixon_plugin_init,
     .ca_errmsg = vc_errmsg,
+    .ca_prompt = vc_prompt,
 };
 
 clixon_plugin_api *

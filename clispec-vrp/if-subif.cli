@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: sub-interface view.
+CLICON_MODE="vrp-subif";
+CLICON_PROMPT="[~%H-subif]";
+CLICON_PLUGIN="cli_vppcfg";
+
+dot1q("802.1Q encapsulation") termination("Terminate tagged frames for routing (exact tag match)") vid("VLAN ID") <outer:uint16 range[1:4094]>("VLAN ID, 1-4094"), vc_encap("dot1q", "exact");
+qinq("QinQ encapsulation") termination("Terminate double-tagged frames for routing (exact tag match)") pe-vid("Outer (provider) VLAN") <outer:uint16 range[1:4094]>("Outer VLAN ID") ce-vid("Inner (customer) VLAN") <inner:uint16 range[1:4094]>("Inner VLAN ID"), vc_encap("dot1q", "exact");
+vlan-type("Match a VLAN without exact matching (VPP: dot1q without exact-match; not allowed with lcp)") dot1q("802.1Q") <outer:uint16 range[1:4094]>("VLAN ID"), vc_encap("dot1q");
+shutdown("Administratively disable the sub-interface"), vc_set_leaf("state", "=down");
+l2xc("Cross-connect all frames to another interface at layer 2 (VPP feature)") (<ifname:string vc_expand_ifs("", "vrp")>("Target interface")|<ifname:string>("Target interface")), vc_set_leaf("l2xc", "ifname");
+undo("Undo a command") {
+    dot1q("Remove the encapsulation (reverts to VLAN = sub-interface number)") termination("Termination") vid("VLAN ID"), vc_del_leaf("encapsulation");
+    qinq("Remove the QinQ encapsulation") termination("Termination"), vc_del_leaf("encapsulation");
+    vlan-type("Remove the VLAN match"), vc_del_leaf("encapsulation");
+    shutdown("Administratively enable the sub-interface"), vc_del_leaf("state");
+    l2xc("Remove the layer 2 cross-connect"), vc_del_leaf("l2xc");
+}

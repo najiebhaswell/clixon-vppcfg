@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Router CLI, Huawei VRP style. Same datastore and commit path as "rtr" (Cisco style).
+# Users must be members of the clicon, vpp and bird groups.
+exec /usr/local/bin/clixon_cli -f /etc/clixon/vppcfg.xml -l s \
+    -o CLICON_CLISPEC_DIR=/usr/local/lib/clixon-vppcfg/clispec-vrp -o CLICON_CLI_MODE=user "$@"

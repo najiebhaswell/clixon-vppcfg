@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: Eth-Trunk view.
+CLICON_MODE="vrp-trunk";
+CLICON_PROMPT="[~%H-Eth-Trunk]";
+CLICON_PLUGIN="cli_vppcfg";
+
+mode("Link aggregation mode (default: lacp-static)") {
+    lacp-static("LACP (IEEE 802.3ad); the peer must run LACP too (recommended)"), vc_set_leaf("mode", "=lacp", "bond");
+    manual("Manual aggregation without LACP") load-balance("Static LAG, hash-based"), vc_set_leaf("mode", "=xor", "bond");
+    active-backup("One active member, the others on standby (VPP mode)"), vc_set_leaf("mode", "=active-backup", "bond");
+    round-robin("Send frames on each member in turn (VPP mode)"), vc_set_leaf("mode", "=round-robin", "bond");
+    broadcast("Send every frame on all members (VPP mode)"), vc_set_leaf("mode", "=broadcast", "bond");
+}
+load-balance("Hash that spreads flows over the members; lacp-static and manual load-balance only (default: src-dst-ip-port)") {
+    src-dst-mac("Source and destination MAC address (VPP l2)"), vc_set_leaf("load-balance", "=l2", "bond");
+    src-dst-ip("MAC and IP addresses (VPP l23)"), vc_set_leaf("load-balance", "=l23", "bond");
+    src-dst-ip-port("IP addresses and TCP/UDP ports; best spread for routed traffic (VPP l34)"), vc_set_leaf("load-balance", "=l34", "bond");
+}
+trunkport("Add a physical member interface") <ifname:string vc_expand_ifs("phy", "vrp")>("Physical interface; it must not have its own IP or lcp configuration"), vc_add_ll("interface", "ifname", "bond");
+mac-address("Set the Eth-Trunk MAC address (default: taken from the first member)") <mac:macaddr>("xx:xx:xx:xx:xx:xx"), vc_set_leaf("mac", "mac");
+shutdown("Administratively disable the Eth-Trunk"), vc_set_leaf("state", "=down");
+l2xc("Cross-connect all frames to another interface at layer 2 (VPP feature)") (<ifname:string vc_expand_ifs("", "vrp")>("Target interface")|<ifname:string>("Target interface")), vc_set_leaf("l2xc", "ifname");
+undo("Undo a command") {
+    mode("Revert to the default mode (lacp-static)"), vc_del_leaf("mode", "bond");
+    load-balance("Revert to the default hash (src-dst-ip-port)"), vc_del_leaf("load-balance", "bond");
+    trunkport("Remove a member interface") <ifname:string vc_expand_ifs("phy", "vrp")>("Physical interface"), vc_del_ll("interface", "ifname", "bond");
+    mac-address("Revert to the MAC address of the first member"), vc_del_leaf("mac");
+    shutdown("Administratively enable the Eth-Trunk"), vc_del_leaf("state");
+    l2xc("Remove the layer 2 cross-connect"), vc_del_leaf("l2xc");
+}

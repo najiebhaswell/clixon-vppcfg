@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: commands shared by all interface views.
+CLICON_MODE="vrp-if:vrp-subif:vrp-loop:vrp-trunk";
+CLICON_PLUGIN="cli_vppcfg";
+
+description("Interface description, also SNMP ifAlias") <text:rest>("Up to 64 characters, no quotes"), vc_set_leaf("description", "text");
+mtu("IP MTU in bytes (default 1500; a sub-interface inherits its parent's MTU)") <mtu:uint16 range[128:9216]>("128-9216; must not exceed the parent's MTU"), vc_set_leaf("mtu", "mtu");
+ip("IPv4 configuration") address("Configure an IPv4 address") {
+    <ip:ipv4addr>("IPv4 address") (<mask:ipv4addr>("Subnet mask, e.g. 255.255.255.252")|<len:uint8 range[1:32]>("Mask length, e.g. 30")) [sub("Secondary address")], vc_addr("add");
+    unnumbered("Borrow the address of another interface") interface("Interface whose address is borrowed") (<ifname:string vc_expand_ifs("", "vrp")>("Interface, usually a LoopBack")|<ifname:string>("Interface, usually a LoopBack")), vc_set_leaf("unnumbered", "ifname");
+}
+ipv6("IPv6 configuration") {
+    enable("Enable IPv6 (accepted for compatibility; IPv6 is active as soon as an address is set)"), vc_noop();
+    address("Configure an IPv6 address") {
+        <ip6:ipv6addr>("IPv6 address") <len6:uint8 range[1:128]>("Prefix length, e.g. 64"), vc_addr("add");
+        <addr:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("IPv6 address/prefix length, e.g. 2001:db8::1/64"), vc_add_ll("address", "addr");
+    }
+}
+lcp("Create a Linux TAP (linux-cp) in the dataplane netns so Linux and BIRD can use this interface") <name:string regexp:"[a-z][a-z0-9.-]{0,14}">("Linux interface name, max. 15 characters; sub-interface: <parent lcp>.<number>"), vc_set_leaf("lcp", "name");
+mpls("Enable MPLS forwarding on this interface"), vc_set_leaf("mpls", "=true");
+undo("Undo a command") {
+    description("Remove the description"), vc_del_leaf("description");
+    mtu("Revert to the default MTU (1500, or the parent's MTU)"), vc_del_leaf("mtu");
+    ip("IPv4 configuration") address("Remove an IPv4 address") {
+        <ip:ipv4addr>("IPv4 address") (<mask:ipv4addr>("Subnet mask")|<len:uint8 range[1:32]>("Mask length")) [sub("Secondary address")], vc_addr("del");
+        unnumbered("Stop borrowing another interface's address"), vc_del_leaf("unnumbered");
+    }
+    ipv6("IPv6 configuration") address("Remove an IPv6 address") {
+        <ip6:ipv6addr>("IPv6 address") <len6:uint8 range[1:128]>("Prefix length"), vc_addr("del");
+        <addr:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("IPv6 address/prefix length"), vc_del_ll("address", "addr");
+    }
+    lcp("Remove the Linux TAP (linux-cp) of this interface"), vc_del_leaf("lcp");
+    mpls("Disable MPLS forwarding"), vc_del_leaf("mpls");
+}
+quit("Return to the system view"), vc_if_exit("system");

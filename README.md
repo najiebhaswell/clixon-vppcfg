@@ -1,14 +1,14 @@
 # clixon-vppcfg
 
-A Cisco-style CLI (and NETCONF) for [VPP](https://fd.io/) interface configuration, built with
+A Cisco-style and Huawei VRP-style CLI (and NETCONF) for [VPP](https://fd.io/) interface configuration, built with
 [Clixon](https://github.com/clicon/clixon) **on top of [vppcfg](https://git.ipng.ch/ipng/vppcfg)**.
 
 Clixon provides the candidate/running datastores, validate, commit, confirmed commit and the CLI.
 vppcfg remains the engine that validates the configuration against the dataplane and applies it to VPP.
 
 ```
- rtr (clixon_cli, Cisco style)        NETCONF
-              └───────────┬───────────┘
+ rtr (Cisco style)   vrp (Huawei VRP style)   NETCONF
+          └──────────────────┬───────────────────┘
               clixon_backend 7.9 (candidate / running datastores)
                           │ backend_vppcfg.so (validate / commit / revert)
                           ▼
@@ -95,13 +95,57 @@ the commands that apply, and `TAB` on `interface` shows each interface's type an
 VPP is rejected as soon as you type `interface <name>`; loopbacks and bonds may be new, and `TAB`
 suggests the next free `loopN` and `BondEthernetN`.
 
+### Huawei VRP style (`vrp`)
+
+`vrp` is a second CLI on the same datastore and commit path, in Huawei VRP8 two-stage style. Both CLIs
+can be used side by side; a change committed in one is visible in the other.
+
+```
+$ vrp
+<BR> display current-configuration
+<BR> system-view
+[~BR] interface Eth-Trunk0
+[~BR-Eth-Trunk0] mode lacp-static
+[~BR-Eth-Trunk0] load-balance src-dst-ip-port
+[*BR-Eth-Trunk0] trunkport cx5-1
+[*BR-Eth-Trunk0] ip address 198.51.100.1 30
+[*BR-Eth-Trunk0] display configuration candidate changes
+[*BR-Eth-Trunk0] commit                  (or: commit trial 300)
+[~BR-Eth-Trunk0] quit
+[~BR] return
+<BR> display ip interface brief
+```
+
+- Prompt: `<BR>` user view, `[~BR]` system view, `[~BR-<interface>]` interface view; `*` instead of `~`
+  when the candidate has uncommitted changes.
+- Aliases: `Eth-TrunkN` = `BondEthernetN`, `LoopBackN` = `loopN` (also `interface Eth-Trunk 0`,
+  `interface LoopBack 0`). Physical ports and sub-interfaces keep their VPP names.
+- `display` instead of `show`, `undo` instead of `no`, `quit` goes up one view, `return` goes to the
+  user view (refused with uncommitted changes).
+- `commit`, `commit trial <seconds>`, `abort` (discard and return to user view), `abort trial`
+  (roll back a trial commit now), `clear configuration candidate` (discard and stay).
+- `ip address A.B.C.D <mask|length> [sub]`, `ip address unnumbered interface LoopBack0`,
+  `ipv6 enable` (accepted, no-op), `ipv6 address X:X::X <length>`.
+- Sub-interfaces: `dot1q termination vid <n>`, `qinq termination pe-vid <n> ce-vid <n>` (both exact
+  match), `vlan-type dot1q <n>` (without exact match).
+- Eth-Trunk: `mode lacp-static | manual load-balance`, `load-balance src-dst-mac | src-dst-ip |
+  src-dst-ip-port`, `trunkport <port>`, or `eth-trunk <n>` in the member port's view.
+- `display current-configuration`, `display configuration candidate [changes]`, `display this`,
+  `display interface [name]`, `display ip interface brief`, `display ip routing-table statistics|<prefix>`,
+  `display ipv6 routing-table ...`, `display eth-trunk`, `display bgp peer [<name> verbose]`, `display version`.
+  `display ip routing-table` without arguments is not offered, because a full table would print a
+  million lines.
+- Extensions without a Huawei equivalent keep VPP terms: `lcp`, `l2xc`, `sflow enable`, bond modes
+  `active-backup`, `round-robin`, `broadcast`.
+
 ### Commit semantics
 
 - `commit` validates (vppcfg check + plan against VPP) and applies. If vppcfg rejects the
   configuration nothing changes and the reason is shown.
-- `commit confirmed <minutes>` applies provisionally. Confirm with `commit` (from any session) before
-  the timeout, otherwise the configuration rolls back automatically. This also holds if the SSH
-  session drops. `commit cancel` rolls back immediately.
+- `commit confirmed <minutes>` (`commit trial <seconds>` in `vrp`) applies provisionally. Confirm with
+  `commit` (from any session) before the timeout, otherwise the configuration rolls back
+  automatically. This also holds if the SSH session drops. `commit cancel` (`abort trial`) rolls back
+  immediately and also resets the candidate.
 - `abort` discards the candidate changes.
 - The candidate is shared by all sessions. `configure` warns when it already contains changes (from
   another session, or left over from a rolled-back confirmed commit: Clixon restores running but does
