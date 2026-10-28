@@ -75,7 +75,7 @@ BR(config-if)# commit                   (or: commit confirmed 5)
 % Commit complete.
 ```
 
-`TAB` and `?` work in every mode and list each option with its help text. Commands can also be run
+`TAB` completes the command; a second `TAB` (or `?`) lists each option with its help text. Commands can also be run
 one-shot: `rtr show running-config`.
 
 | Mode | Commands |

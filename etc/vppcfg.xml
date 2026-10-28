@@ -20,8 +20,9 @@
   <CLICON_NACM_MODE>disabled</CLICON_NACM_MODE>
   <CLICON_YANG_LIBRARY>false</CLICON_YANG_LIBRARY>
   <CLICON_CLI_LINESCROLLING>0</CLICON_CLI_LINESCROLLING>
-  <!-- 9 = bit1 (TAB lists one line per option with help, like '?') + bit4 (complete and list at once) -->
-  <CLICON_CLI_TAB_MODE>9</CLICON_CLI_TAB_MODE>
+  <!-- 1 = bit1: a list shows one line per option with help, like "?". Bit4 off: the first TAB only
+       completes the command, a second TAB lists the alternatives. -->
+  <CLICON_CLI_TAB_MODE>1</CLICON_CLI_TAB_MODE>
   <CLICON_CLI_HIST_FILE>~/.rtr_history</CLICON_CLI_HIST_FILE>
   <autocli>
     <module-default>false</module-default>
