@@ -132,6 +132,15 @@ def xml_to_cfg(path):
             for el in top:
                 name = el.findtext(f"{{{NS}}}name")
                 cfg.setdefault("bondethernets", {})[name] = element_to_dict(el, BOND_ORDER, {"interface": "interfaces"})
+    # vppcfg treats an empty interface dict as missing ("if not iface"), and get_admin_state() even
+    # as admin down. An entry without settings means "exists with defaults", so render it with the
+    # default admin state.
+    for body in cfg.get("interfaces", {}).values():
+        if not body:
+            body["state"] = "up"
+        for sub in body.get("sub-interfaces", {}).values():
+            if not sub:
+                sub["state"] = "up"
     # Stable order: bondethernets, loopbacks, interfaces; names in natural order.
     out = {}
     for section in ("bondethernets", "loopbacks", "interfaces"):
