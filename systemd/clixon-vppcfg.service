@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Clixon backend for VPP interface configuration (clixon-vppcfg)
+After=vpp.service netns-dataplane.service
+Wants=vpp.service
+
+[Service]
+Type=simple
+RuntimeDirectory=clixon-vppcfg
+ExecStart=/usr/local/sbin/clixon_backend -F -f /etc/clixon/vppcfg.xml -l e
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

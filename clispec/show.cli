@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Show commands, available in all modes.
+CLICON_MODE="exec:configure:configure-if";
+CLICON_PLUGIN="cli_vppcfg";
+
+show("Show information") {
+    running-config("Active configuration (running)"), vc_show_config("running");
+    candidate-config("Candidate configuration, including uncommitted changes"), vc_show_config("candidate");
+    configuration("Configuration") diff("Uncommitted changes (candidate vs running)"), vc_show_diff();
+    interfaces("VPP interface state and counters") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "interface", "$ifname");
+    hardware("NIC hardware details") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "hardware-interfaces", "$ifname");
+    ip("IPv4") {
+        interface("Interface") brief("Interface and address summary"), vc_ip_brief();
+        route("VPP routing table (FIB)") {
+            summary("Prefix count per length"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "summary");
+            <prefix:string>("IPv4 address or prefix"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "$prefix");
+        }
+    }
+    ipv6("IPv6") route("VPP routing table (FIB)") {
+        summary("Prefix count per length"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "summary");
+        <prefix:string>("IPv6 address or prefix"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "$prefix");
+    }
+    lcp("VPP <-> Linux TAP interface pairs"), vc_run("/usr/bin/vppctl", "show", "lcp");
+    bond("Bond/LACP status"), vc_run("/usr/bin/vppctl", "show", "bond", "details");
+    bgp("BGP (BIRD)") {
+        summary("Session summary"), vc_run("/usr/sbin/birdc", "show", "protocols");
+        neighbor("Session details") <peer:string>("BIRD protocol name"), vc_run("/usr/sbin/birdc", "show", "protocols", "all", "$peer");
+    }
+    version("VPP version"), vc_run("/usr/bin/vppctl", "show", "version");
+}

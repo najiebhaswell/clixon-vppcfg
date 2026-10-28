@@ -1,0 +1,29 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- /etc/clixon/vppcfg.xml — Clixon configuration for clixon-vppcfg ("rtr" CLI). -->
+<clixon-config xmlns="http://clicon.org/config">
+  <CLICON_CONFIGFILE>/etc/clixon/vppcfg.xml</CLICON_CONFIGFILE>
+  <CLICON_FEATURE>ietf-netconf:startup</CLICON_FEATURE>
+  <CLICON_FEATURE>ietf-netconf:confirmed-commit</CLICON_FEATURE>
+  <CLICON_YANG_DIR>/usr/local/share/clixon</CLICON_YANG_DIR>
+  <CLICON_YANG_DIR>/usr/local/share/clixon-vppcfg/yang</CLICON_YANG_DIR>
+  <CLICON_YANG_MAIN_FILE>/usr/local/share/clixon-vppcfg/yang/vppcfg@2026-10-28.yang</CLICON_YANG_MAIN_FILE>
+  <CLICON_CLI_MODE>exec</CLICON_CLI_MODE>
+  <CLICON_CLI_DIR>/usr/local/lib/clixon-vppcfg/cli</CLICON_CLI_DIR>
+  <CLICON_CLISPEC_DIR>/usr/local/lib/clixon-vppcfg/clispec</CLICON_CLISPEC_DIR>
+  <CLICON_BACKEND_DIR>/usr/local/lib/clixon-vppcfg/backend</CLICON_BACKEND_DIR>
+  <CLICON_SOCK>/run/clixon-vppcfg.sock</CLICON_SOCK>
+  <CLICON_SOCK_GROUP>clicon</CLICON_SOCK_GROUP>
+  <CLICON_BACKEND_PIDFILE>/run/clixon-vppcfg.pid</CLICON_BACKEND_PIDFILE>
+  <!-- The running datastore is loaded at backend start: a commit is persistent immediately. -->
+  <CLICON_XMLDB_DIR>/var/lib/clixon-vppcfg</CLICON_XMLDB_DIR>
+  <CLICON_STARTUP_MODE>running</CLICON_STARTUP_MODE>
+  <CLICON_NACM_MODE>disabled</CLICON_NACM_MODE>
+  <CLICON_YANG_LIBRARY>false</CLICON_YANG_LIBRARY>
+  <CLICON_CLI_LINESCROLLING>0</CLICON_CLI_LINESCROLLING>
+  <!-- 9 = bit1 (TAB lists one line per option with help, like '?') + bit4 (complete and list at once) -->
+  <CLICON_CLI_TAB_MODE>9</CLICON_CLI_TAB_MODE>
+  <CLICON_CLI_HIST_FILE>~/.rtr_history</CLICON_CLI_HIST_FILE>
+  <autocli>
+    <module-default>false</module-default>
+  </autocli>
+</clixon-config>

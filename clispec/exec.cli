@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Exec mode (prompt "BR#").
+CLICON_MODE="exec";
+CLICON_PROMPT="%H# ";
+CLICON_PLUGIN="cli_vppcfg";
+
+configure("Enter configuration mode") [terminal("Configure from the terminal")], vc_configure();
+exit("Exit the CLI"), cli_quit();
+quit("Exit the CLI"), cli_quit();

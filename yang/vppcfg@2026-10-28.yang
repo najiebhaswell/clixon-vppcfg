@@ -1,0 +1,176 @@
+module vppcfg {
+    yang-version 1.1;
+    namespace "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg";
+    prefix vc;
+
+    organization "clixon-vppcfg";
+    contact "https://github.com/najiebhaswell/clixon-vppcfg";
+    description
+        "VPP interface configuration model. The structure maps 1:1 to the
+         vppcfg 1.2.x schema (/etc/vpp/vppcfg.yaml): every Clixon commit is
+         rendered to vppcfg.yaml and applied by vppcfg. Semantic validation
+         (PHY existence, address conflicts, child MTU <= parent, etc.) is
+         done by vppcfg during validate/commit.
+
+         Copyright 2026 Najieb Haswell. Licensed under the Apache License, Version 2.0.";
+
+    revision 2026-10-28 {
+        description "Phase 1: interfaces, sub-interfaces, loopbacks, bondethernets.";
+    }
+
+    typedef ip-interface {
+        type string {
+            pattern '[0-9.]+/[0-9]{1,2}|[0-9a-fA-F:.]+/[0-9]{1,3}';
+        }
+        description "Address with prefix length, e.g. 198.51.100.2/30 (host bits allowed).";
+    }
+    typedef mac-address {
+        type string {
+            pattern '[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}';
+        }
+    }
+    typedef description-string {
+        type string {
+            length "1..64";
+            pattern "[^\"']*";
+        }
+    }
+    typedef lcp-name {
+        type string {
+            length "1..15";
+            pattern '[a-z]+[a-z0-9.-]*';
+        }
+        description "Linux TAP name in the dataplane netns. Sub-interfaces use <parent lcp>.<id>,
+                     e.g. cx5-0.100 (requires encapsulation exact-match and a parent lcp).";
+    }
+    typedef mtu-type {
+        type uint16 {
+            range "128..9216";
+        }
+    }
+    typedef vlan-id {
+        type uint16 {
+            range "1..4095";
+        }
+    }
+    typedef admin-state {
+        type enumeration {
+            enum up;
+            enum down;
+        }
+    }
+
+    container interfaces {
+        description "Physical (PHY) and BondEthernet interfaces, with their sub-interfaces.";
+        list interface {
+            key name;
+            leaf name {
+                type string {
+                    length "1..63";
+                }
+                description "VPP interface name, e.g. cx5-0 or BondEthernet0.";
+            }
+            leaf description { type description-string; }
+            leaf mac { type mac-address; }
+            leaf lcp { type lcp-name; }
+            leaf mtu { type mtu-type; }
+            leaf-list address {
+                type ip-interface;
+                ordered-by user;
+            }
+            leaf unnumbered { type string; }
+            leaf l2xc { type string; }
+            leaf state { type admin-state; }
+            leaf mpls { type boolean; }
+            leaf device-type {
+                type enumeration {
+                    enum dpdk;
+                    enum af-packet;
+                    enum rdma;
+                }
+            }
+            leaf sflow { type boolean; }
+            list sub-interface {
+                key id;
+                leaf id {
+                    type uint32 {
+                        range "1..4294967295";
+                    }
+                }
+                leaf description { type description-string; }
+                leaf lcp { type lcp-name; }
+                leaf mtu { type mtu-type; }
+                leaf-list address {
+                    type ip-interface;
+                    ordered-by user;
+                }
+                leaf unnumbered { type string; }
+                container encapsulation {
+                    leaf dot1q { type vlan-id; }
+                    leaf dot1ad { type vlan-id; }
+                    leaf inner-dot1q { type vlan-id; }
+                    leaf exact-match { type boolean; }
+                }
+                leaf l2xc { type string; }
+                leaf state { type admin-state; }
+                leaf mpls { type boolean; }
+            }
+        }
+    }
+
+    container loopbacks {
+        list loopback {
+            key name;
+            leaf name {
+                type string {
+                    pattern 'loop[0-9]+';
+                }
+            }
+            leaf description { type description-string; }
+            leaf mac { type mac-address; }
+            leaf lcp { type lcp-name; }
+            leaf mtu { type mtu-type; }
+            leaf-list address {
+                type ip-interface;
+                ordered-by user;
+            }
+            leaf unnumbered { type string; }
+            leaf mpls { type boolean; }
+        }
+    }
+
+    container bondethernets {
+        description "Bond members and mode. The bond's L3 configuration lives in /interfaces.";
+        list bondethernet {
+            key name;
+            leaf name {
+                type string {
+                    pattern 'BondEthernet[0-9]+';
+                }
+            }
+            leaf description { type description-string; }
+            leaf mac { type mac-address; }
+            leaf-list interface {
+                type string;
+                ordered-by user;
+                description "Member interfaces.";
+            }
+            leaf mode {
+                type enumeration {
+                    enum round-robin;
+                    enum active-backup;
+                    enum broadcast;
+                    enum lacp;
+                    enum xor;
+                }
+            }
+            leaf load-balance {
+                type enumeration {
+                    enum l2;
+                    enum l23;
+                    enum l34;
+                }
+            }
+        }
+    }
+}

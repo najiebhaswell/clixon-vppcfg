@@ -1,0 +1,5 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Router CLI (Clixon, Cisco style). Users must be members of the clicon, vpp and bird groups.
+# -l s: Clixon's internal log goes to syslog; the cli_vppcfg plugin prints errors to the terminal as "% ...".
+exec /usr/local/bin/clixon_cli -f /etc/clixon/vppcfg.xml -l s "$@"

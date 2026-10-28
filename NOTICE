@@ -1,0 +1,28 @@
+clixon-vppcfg
+Copyright 2026 Najieb Haswell
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It builds on, links against or invokes the following third-party software,
+which is not included in this repository:
+
+  Clixon and CLIgen
+    Copyright (C) 2001-2026 Olof Hagsand
+    Copyright (C) 2009-2016 Olof Hagsand and Benny Holmgren
+    Copyright (C) 2020-2022 Olof Hagsand and Rubicon Communications, LLC (Netgate)
+    Licensed under the Apache License, Version 2.0 or the GNU GPL version 3.
+    https://github.com/clicon/clixon  https://github.com/clicon/cligen
+
+  vppcfg
+    Copyright Pim van Pelt (https://github.com/pimvanpelt), IPng Networks GmbH
+    Licensed under the Apache License, Version 2.0.
+    https://git.ipng.ch/ipng/vppcfg
+    The YANG model yang/vppcfg@2026-10-28.yang mirrors the vppcfg YAML schema.
+
+  VPP (Vector Packet Processing)
+    The FD.io project, licensed under the Apache License, Version 2.0.
+    https://fd.io/
+
+  BIRD Internet Routing Daemon
+    CZ.NIC, z.s.p.o., licensed under the GNU GPL version 2 or later.
+    https://bird.network.cz/  (invoked as an external program by the show bgp commands)

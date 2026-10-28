@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# commit/validate/abort/end, available in configure and configure-if modes.
+CLICON_MODE="configure:configure-if";
+CLICON_PLUGIN="cli_vppcfg";
+
+commit("Apply changes to the router"), vc_commit(); {
+    <confirmed:string keyword:confirmed>("Roll back automatically unless confirmed with 'commit'") <minutes:uint32 range[1:120]>("Confirmation timeout (minutes)"), vc_commit();
+    cancel("Cancel the pending confirmed commit (roll back now)"), vc_commit_cancel();
+}
+validate("Validate the candidate without applying it"), vc_validate();
+abort("Discard all uncommitted changes and return to exec mode"), vc_abort();
+end("Return to exec mode"), vc_end();

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Global configuration mode (prompt "BR(config)#").
+CLICON_MODE="configure";
+CLICON_PROMPT="%H(config)# ";
+CLICON_PLUGIN="cli_vppcfg";
+
+interface("Select or create an interface") (<ifname:string vc_expand_ifs("new")>("Interface name")|<ifname:string>("New interface: loopN, BondEthernetN, or <parent>.<vlan> for a sub-interface")), vc_if_enter();
+no("Negate a command") interface("Remove all configuration of an interface") (<ifname:string vc_expand_ifs()>("Interface name")|<ifname:string>("Interface name")), vc_no_interface();
+exit("Return to exec mode"), vc_end();
