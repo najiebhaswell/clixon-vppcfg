@@ -120,6 +120,8 @@ $ vrp
   when the candidate has uncommitted changes.
 - Aliases: `Eth-TrunkN` = `BondEthernetN`, `LoopBackN` = `loopN` (also `interface Eth-Trunk 0`,
   `interface LoopBack 0`). Physical ports and sub-interfaces keep their VPP names.
+- Commands and interface names are case-insensitive, as in VRP (`dis int eth-trunk0`, `int CX5-0`);
+  names are stored with their VPP spelling. The Cisco-style `rtr` stays case-sensitive.
 - `display` instead of `show`, `undo` instead of `no`, `quit` goes up one view, `return` goes to the
   user view (refused with uncommitted changes).
 - `commit`, `commit trial <seconds>`, `abort` (discard and return to user view), `abort trial`

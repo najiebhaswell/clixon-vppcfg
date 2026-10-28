@@ -88,8 +88,36 @@ name_ok(const char *s)
     return 1;
 }
 
+static int vpp_ifnames(cvec *out);
+
+/*! VRP is case-insensitive: replace a physical interface name (or the parent of a sub-interface)
+ * by its VPP spelling when it only differs in case. */
+static void
+fix_case(char *name)
+{
+    const char *dot = strrchr(name, '.');
+    size_t      plen = (dot != NULL && dot != name && all_digits(dot + 1)) ? (size_t)(dot - name) : strlen(name);
+    cvec       *names;
+    cg_var     *cv = NULL;
+    const char *n;
+
+    if (!_vrp || strncmp(name, "BondEthernet", 12) == 0 || strncmp(name, "loop", 4) == 0)
+        return;
+    if ((names = cvec_new(0)) == NULL)
+        return;
+    vpp_ifnames(names);
+    while ((cv = cvec_each(names, cv)) != NULL) {
+        n = cv_string_get(cv);
+        if (strlen(n) == plen && strncasecmp(n, name, plen) == 0) {
+            memcpy(name, n, plen);
+            break;
+        }
+    }
+    cvec_free(names);
+}
+
 /*! Map a VRP alias to the VPP name: Eth-TrunkN -> BondEthernetN, LoopBackN -> loopN
- * (case-insensitive, keeps a ".N" sub-interface suffix). Other names are copied. */
+ * (case-insensitive, keeps a ".N" sub-interface suffix); other names keep their VPP spelling. */
 static void
 canon_ifname(const char *in,
              char       *out,
@@ -99,8 +127,10 @@ canon_ifname(const char *in,
         snprintf(out, len, "BondEthernet%s", in + 9);
     else if (strncasecmp(in, "loopback", 8) == 0 && isdigit((unsigned char)in[8]))
         snprintf(out, len, "loop%s", in + 8);
-    else
+    else {
         snprintf(out, len, "%s", in);
+        fix_case(out);
+    }
 }
 
 /*! Map a VPP name to its VRP alias (inverse of canon_ifname). */
@@ -1291,11 +1321,26 @@ vc_errmsg(clixon_handle        h,
     return 0;
 }
 
+/*! Plugin start: the VRP CLI ("vrp", clispec-vrp/) matches commands and names case-insensitively,
+ * like Huawei VRP; the Cisco CLI stays case-sensitive. */
+static int
+vc_start(clixon_handle h)
+{
+    const char *dir = clicon_option_str(h, "CLICON_CLISPEC_DIR");
+
+    if (dir != NULL && strstr(dir, "clispec-vrp") != NULL) {
+        _vrp = 1;
+        cligen_caseignore_set(cli_cligen(h), 1);
+    }
+    return 0;
+}
+
 clixon_plugin_api *clixon_plugin_init(clixon_handle h);
 
 static clixon_plugin_api api = {
     .ca_name   = "cli_vppcfg",
     .ca_init   = clixon_plugin_init,
+    .ca_start  = vc_start,
     .ca_errmsg = vc_errmsg,
     .ca_prompt = vc_prompt,
 };
