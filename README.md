@@ -165,6 +165,9 @@ with `if-match ip-prefix OWN` and `apply as-path 65000 additive 2`, `bgp 65000` 
 - Before anything is applied the candidate is checked for missing route-maps, prefix-lists and
   peer-groups, missing AS numbers, invalid prefixes and ge/le, then parsed with `bird -p` together
   with bird.conf. Messages use CLI terms.
+- `show bgp all summary` (`display bgp all summary`): peers per address family with AS, uptime, state
+  and prefixes received/accepted/sent, built from `birdc show protocols all` (BIRD has no message
+  counters, so MsgRcvd/MsgSent/OutQ are not shown).
 - `show bgp summary`, `show bgp neighbor <address>`, `show ip bgp <prefix>`
   (`display bgp peer [<address> verbose]`, `display bgp routing-table <prefix>`).
 

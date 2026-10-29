@@ -24,6 +24,7 @@ show("Show operational state and configuration") {
     lcp("linux-cp pairs: VPP interface and its Linux TAP in the dataplane netns"), vc_run("/usr/bin/vppctl", "show", "lcp");
     bond("Bond members and LACP state"), vc_run("/usr/bin/vppctl", "show", "bond", "details");
     bgp("BGP sessions (BIRD)") {
+        all("All address families") summary("BGP neighbors per address family: AS, uptime, state and prefixes received, accepted and sent"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "bgp-summary");
         summary("All BIRD protocols with state and uptime"), vc_run("/usr/sbin/birdc", "show", "protocols");
         neighbor("Full details of one session") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Neighbor")>("Neighbor address")|<peer:string>("Neighbor address or BIRD protocol name")), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "bgp-neighbor", "$peer");
     }

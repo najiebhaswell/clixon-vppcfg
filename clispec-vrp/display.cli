@@ -23,6 +23,7 @@ display("Display information") {
     eth-trunk("Eth-Trunk members and LACP state"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "bond", "details");
     lcp("linux-cp pairs: VPP interface and its Linux TAP in the dataplane netns"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "lcp");
     bgp("BGP information (BIRD)") {
+        all("All address families") summary("BGP peers per address family: AS, uptime, state and prefixes received, accepted and sent"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "bgp-summary", "--style", "vrp");
         peer("BGP peers: all BIRD protocols with state and uptime"), vc_run("/usr/sbin/birdc", "show", "protocols"); {
             (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Peer")>("Peer address")|<peer:string>("Peer address or BIRD protocol name")) verbose("Full details of one session"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "bgp-neighbor", "$peer");
         }

@@ -12,6 +12,9 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
                                          write /etc/bird/bird-clixon.conf and 'birdc configure' if it changed
   clixon-vppcfg render-bird <cfg.xml>    print the rendered BIRD configuration (debugging)
   clixon-vppcfg bgp-neighbor <peer>      'birdc show protocols all' for a neighbor address or protocol name
+  clixon-vppcfg bgp-summary [--style cisco|vrp] [ipv4|ipv6]
+                                         BGP peers per address family (show bgp all summary /
+                                         display bgp all summary), from 'birdc show protocols all'
   clixon-vppcfg import <vppcfg.yaml>     print a Clixon XML datastore from vppcfg.yaml (initial migration)
   clixon-vppcfg render <cfg.xml>         print the rendered YAML (debugging)
   clixon-vppcfg show-config <cfg.xml> [--style cisco|vrp] [--if NAME]
@@ -814,6 +817,106 @@ def cmd_bgp_neighbor(peer):
     sys.stdout.write(r.stdout + r.stderr)
 
 
+def bird_bgp_sessions(text=None):
+    """BGP protocols from 'birdc show protocols all': dicts with name, state, since, bgp-state,
+    neighbor, remote-as, local-as, description and channels {ipv4|ipv6: (received, accepted, exported)}."""
+    if text is None:
+        text = subprocess.run([BIRDC, "show", "protocols", "all"], capture_output=True, text=True).stdout
+    sessions, cur, chan = [], None, None
+    for line in text.splitlines():
+        m = re.match(r"(\S+)\s+(\S+)\s+\S+\s+(\S+)\s+(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", line)
+        if m and not line.startswith(" "):
+            cur = None
+            if m.group(2) == "BGP":
+                cur = {"name": m.group(1), "state": m.group(3), "since": m.group(4), "channels": {}}
+                sessions.append(cur)
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"\s+([A-Za-z ]+?):\s+(.*)", line)
+        if re.match(r"\s+Channel (ipv4|ipv6)", line):
+            chan = line.split()[1]
+            cur["channels"][chan] = (0, 0, 0)
+        elif m:
+            key, val = m.group(1), m.group(2).strip()
+            if key == "BGP state":
+                cur["bgp-state"] = val
+            elif key == "Neighbor address":
+                cur["neighbor"] = val.split("%")[0]
+            elif key == "Neighbor AS":
+                cur["remote-as"] = val
+            elif key == "Local AS":
+                cur["local-as"] = val
+            elif key == "Description":
+                cur["description"] = val
+            elif key == "Routes" and chan:
+                n = dict((k, int(v)) for v, k in re.findall(r"(\d+) (imported|filtered|exported)", val))
+                cur["channels"][chan] = (n.get("imported", 0) + n.get("filtered", 0), n.get("imported", 0),
+                                         n.get("exported", 0))
+    return sessions
+
+
+def updown(since):
+    """Time since a BIRD timestamp: hh:mm:ss below one day, else NdNNh."""
+    try:
+        t = int(time.time() - time.mktime(time.strptime(since, "%Y-%m-%d %H:%M:%S")))
+    except ValueError:
+        return since
+    if t < 86400:
+        return f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}"
+    return f"{t // 86400}d{t % 86400 // 3600:02d}h"
+
+
+def cmd_bgp_summary(style, afs, text=None):
+    st = subprocess.run([BIRDC, "show", "status"], capture_output=True, text=True).stdout
+    m = re.search(r"Router ID is (\S+)", st)
+    rid = m.group(1) if m else "?"
+    sessions = bird_bgp_sessions(text)
+    las = sorted({s["local-as"] for s in sessions if "local-as" in s}, key=int)
+    las = ", ".join(las) or "-"
+    out = []
+    if style == "vrp":
+        out += [f" BGP local router ID        : {rid}", f" Local AS number            : {las}"]
+    for af in afs:
+        peers = [s for s in sessions if af in s["channels"]]
+        peers.sort(key=lambda s: (ipaddress.ip_address(s["neighbor"]).version, ipaddress.ip_address(s["neighbor"]))
+                   if is_ip(s.get("neighbor", "")) else (9, s["name"]))
+        est = sum(1 for s in peers if s.get("bgp-state") == "Established")
+        w = max([15] + [len(s.get("neighbor", "?")) for s in peers])
+        title = "IPv4 Unicast" if af == "ipv4" else "IPv6 Unicast"
+
+        def state(s):
+            if s["state"] == "down":
+                return "Idle(Admin)" if style == "vrp" else "Idle (Admin)"
+            return s.get("bgp-state", "?")
+
+        if style == "vrp":
+            out += ["", f" Address Family: {title}", " " + "-" * 92,
+                    f" Total number of peers      : {len(peers)}",
+                    f" Peers in established state : {est}"]
+            if peers:
+                out += ["", f"  {'Peer':<{w}} {'V':>1} {'AS':>10}  {'Up/Down':>9}  {'State':<12} "
+                       f"{'PrefRcv':>8} {'PrefAcc':>8} {'PrefSnt':>8}  Name"]
+            for s in peers:
+                rcv, acc, snt = s["channels"][af]
+                out.append(f"  {s.get('neighbor', '?'):<{w}} 4 {s.get('remote-as', '?'):>10}  {updown(s['since']):>9}  "
+                           f"{state(s):<12} {rcv:>8} {acc:>8} {snt:>8}  {s['name']}")
+        else:
+            out += [f"For address family: {title}",
+                    f"BGP router identifier {rid}, local AS number {las}",
+                    f"{len(peers)} neighbor(s), {est} established"]
+            if peers:
+                out += ["", f"{'Neighbor':<{w}} {'V':>1} {'AS':>10} {'Up/Down':>9} {'State/PfxRcd':>14} "
+                       f"{'PfxAcc':>8} {'PfxSnt':>8}  Name"]
+            for s in peers:
+                rcv, acc, snt = s["channels"][af]
+                sp = str(rcv) if s.get("bgp-state") == "Established" else state(s)
+                out.append(f"{s.get('neighbor', '?'):<{w}} 4 {s.get('remote-as', '?'):>10} {updown(s['since']):>9} "
+                           f"{sp:>14} {acc:>8} {snt:>8}  {s['name']}")
+            out.append("")
+    print("\n".join(out).rstrip())
+
+
 # ---------------------------------------------------------------------------
 # Cisco-style output
 # ---------------------------------------------------------------------------
@@ -1352,6 +1455,8 @@ def main():
             die(("Error: " if style == "vrp" else "% ") + str(ex))
     elif verb == "render-bird" and len(args) == 1:
         sys.stdout.write(render_bird(xml_to_bgp(args[0])))
+    elif verb == "bgp-summary" and len(args) <= 1 and (not args or args[0] in ("ipv4", "ipv6")):
+        cmd_bgp_summary(style, args or ["ipv4", "ipv6"])
     elif verb == "bgp-neighbor" and len(args) == 1:
         cmd_bgp_neighbor(args[0])
     elif verb == "render" and len(args) == 1:
