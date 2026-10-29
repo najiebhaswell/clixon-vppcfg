@@ -27,10 +27,20 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 JOBS=$(nproc)
 
-# Version: VERSION file plus the commit count, so every commit sorts higher
+# Version from the VERSION file: exactly that on the release tag v<VERSION>; after the tag
+# <VERSION>+git<commits since the tag>.<hash>; before it <VERSION>~git<commits>.<hash>, which sorts
+# below the release.
 VERSION="$(cat "$TOP/VERSION")"
 if git -C "$TOP" rev-parse --git-dir >/dev/null 2>&1; then
-    VERSION="$VERSION+git$(git -C "$TOP" rev-list --count HEAD).$(git -C "$TOP" rev-parse --short HEAD)"
+    HASH=$(git -C "$TOP" rev-parse --short HEAD)
+    if [ "$(git -C "$TOP" describe --tags --exact-match HEAD 2>/dev/null)" = "v$VERSION" ] &&
+        [ -z "$(git -C "$TOP" status --porcelain --untracked-files=no)" ]; then
+        :
+    elif git -C "$TOP" rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+        VERSION="$VERSION+git$(git -C "$TOP" rev-list --count "v$VERSION..HEAD").$HASH"
+    else
+        VERSION="$VERSION~git$(git -C "$TOP" rev-list --count HEAD).$HASH"
+    fi
 fi
 
 # Depends: line for the ELF files in a staged tree, from their direct (NEEDED) libraries. Libraries
@@ -91,6 +101,8 @@ if [ $SKIP_CLIXON = 0 ]; then
     # --- CLIgen
     git clone -q --depth 1 -b "$CLIXON_VERSION" https://github.com/clicon/cligen.git "$WORK/cligen"
     (cd "$WORK/cligen" && ./configure -q && make -s -j"$JOBS" && make -s install DESTDIR="$CLIGEN_ROOT")
+    install -d "$CLIGEN_ROOT/usr/local/share/doc/cligen"
+    install -m 644 "$WORK"/cligen/LICENSE* "$WORK"/cligen/README* "$CLIGEN_ROOT/usr/local/share/doc/cligen/"
     build_deb "$CLIGEN_ROOT" cligen "$CLIXON_VERSION-$CLIXON_REV" "$(shlib_depends "$CLIGEN_ROOT")" \
         "CLIgen command-line interface generator (library and headers)
  CLIgen builds interactive command-line interfaces from a syntax specification.
@@ -103,6 +115,8 @@ if [ $SKIP_CLIXON = 0 ]; then
             CPPFLAGS="-I$CLIGEN_ROOT/usr/local/include" LDFLAGS="-L$CLIGEN_ROOT/usr/local/lib" &&
         LD_LIBRARY_PATH="$CLIGEN_ROOT/usr/local/lib" make -s -j"$JOBS" &&
         make -s install DESTDIR="$CLIXON_ROOT")
+    install -d "$CLIXON_ROOT/usr/local/share/doc/clixon"
+    install -m 644 "$WORK"/clixon/LICENSE* "$WORK"/clixon/README* "$CLIXON_ROOT/usr/local/share/doc/clixon/"
     build_deb "$CLIXON_ROOT" clixon "$CLIXON_VERSION-$CLIXON_REV" \
         "cligen (= $CLIXON_VERSION-$CLIXON_REV), $(shlib_depends "$CLIXON_ROOT" "$CLIGEN_ROOT")" \
         "YANG-based configuration manager (NETCONF, RESTCONF, CLI)

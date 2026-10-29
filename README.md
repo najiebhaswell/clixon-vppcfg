@@ -67,7 +67,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now clixon-vppcfg
 
 `make deb` (or `packaging/build-debs.sh [--skip-clixon] [OUTDIR]`) builds three packages in `dist/`:
 `cligen` and `clixon` 7.9.0 from the upstream tags, and `clixon-vppcfg`, versioned
-`<VERSION>+git<commits>.<hash>`. They use the same `/usr/local` layout as `make install`, so they
+`<VERSION>` on the release tag `v<VERSION>`, `<VERSION>+git<commits since the tag>.<hash>` after it. They use the same `/usr/local` layout as `make install`, so they
 replace a source installation in place. Build host: build-essential, flex, bison, libssl-dev,
 libnghttp2-dev, git, dpkg-dev.
 
