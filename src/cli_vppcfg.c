@@ -723,8 +723,9 @@ vc_ip_brief(clixon_handle h,
 }
 
 /* Run an operational command: argv = program, arguments...; "$var" is replaced by the CLI
- * variable value, "@var" by the value mapped to a VPP interface name (both skipped when an
- * optional variable was not given). */
+ * variable value, "@var" by the value mapped to a VPP interface name, "--opt=$var" by "--opt=" and
+ * the value (all skipped when an optional variable was not given), and "+var:text" by text when the
+ * variable or keyword var was given. */
 int
 vc_run(clixon_handle h,
        cvec         *cvv,
@@ -736,7 +737,30 @@ vc_run(clixon_handle h,
 
     for (i = 0; i < cvec_len(argv) && n < 31; i++) {
         const char *a = cv_string_get(cvec_i(argv, i));
-        if (a[0] == '$' || a[0] == '@') {
+        const char *eq = strstr(a, "=$");
+        if (a[0] == '+' && strchr(a, ':') != NULL) {
+            char var[64];
+            snprintf(var, sizeof(var), "%.*s", (int)(strchr(a, ':') - a - 1), a + 1);
+            if (cvec_find(cvv, var) == NULL)
+                continue;
+            if ((args[n] = strdup(strchr(a, ':') + 1)) == NULL)
+                goto fail;
+        }
+        else if (a[0] == '-' && eq != NULL) {
+            cg_var *cv = cvec_find(cvv, eq + 2);
+            char   *v;
+            if (cv == NULL)
+                continue;
+            if ((v = cv2str_dup(cv)) == NULL)
+                goto fail;
+            if ((args[n] = malloc(strlen(a) + strlen(v) + 1)) == NULL) {
+                free(v);
+                goto fail;
+            }
+            sprintf(args[n], "%.*s%s", (int)(eq - a + 1), a, v);
+            free(v);
+        }
+        else if (a[0] == '$' || a[0] == '@') {
             cg_var *cv = cvec_find(cvv, a + 1);
             char    buf[128];
             if (cv == NULL)

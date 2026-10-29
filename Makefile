@@ -28,6 +28,9 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/share/clixon-vppcfg/yang
 	install -m 644 yang/*.yang $(DESTDIR)$(PREFIX)/share/clixon-vppcfg/yang/
 	install -D -m 755 helper/clixon-vppcfg $(DESTDIR)$(PREFIX)/libexec/clixon-vppcfg/clixon-vppcfg
+	install -D -m 755 helper/nettool $(DESTDIR)$(PREFIX)/libexec/clixon-vppcfg/nettool
+	visudo -cqf etc/sudoers-clixon-vppcfg
+	install -D -m 440 etc/sudoers-clixon-vppcfg $(DESTDIR)/etc/sudoers.d/clixon-vppcfg
 	install -D -m 755 bin/rtr $(DESTDIR)$(PREFIX)/bin/rtr
 	install -D -m 755 bin/vrp $(DESTDIR)$(PREFIX)/bin/vrp
 	install -D -m 644 etc/vppcfg.xml $(DESTDIR)/etc/clixon/vppcfg.xml

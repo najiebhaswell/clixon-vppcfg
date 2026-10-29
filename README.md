@@ -171,6 +171,25 @@ with `if-match ip-prefix OWN` and `apply as-path 65000 additive 2`, `bgp 65000` 
 - `show bgp summary`, `show bgp neighbor <address>`, `show ip bgp <prefix>`
   (`display bgp peer [<address> verbose]`, `display bgp routing-table <prefix>`).
 
+### Network tools
+
+| `rtr` (exec mode) | `vrp` (every view) |
+|---|---|
+| `ping [vrf mgmt] [ipv6] HOST [repeat N] [size N] [source IP] [df-bit]` | `ping [ipv6] [-a IP] [-c N] [-f] [-s N] [-vpn-instance mgmt] HOST` |
+| `traceroute [vrf mgmt] [ipv6] HOST [source IP]` | `tracert [ipv6] [-a IP] [-vpn-instance mgmt] HOST` |
+| `mtr [vrf mgmt] [ipv6] HOST [repeat N] [source IP]` | `mtr [ipv6] [-a IP] [-c N] [-vpn-instance mgmt] HOST` |
+| `nslookup NAME [SERVER]`, `dig NAME [TYPE] [server IP]` | same |
+
+- ping/traceroute/mtr use the router's routing table (the `dataplane` namespace with the linux-cp TAPs,
+  routes from BIRD) unless `vrf mgmt` / `-vpn-instance mgmt` selects the host's management network.
+  DNS lookups, including host names given to ping, use the management network, where the resolvers are.
+- Cisco `size` is the whole datagram (IP header included), Huawei `-s` the ICMP payload, as on the
+  real routers; with `df-bit` / `-f` this tests the path MTU.
+- They run through `/usr/local/libexec/clixon-vppcfg/nettool`, which members of the `clicon` group may
+  run with sudo (`/etc/sudoers.d/clixon-vppcfg`, installed by `make install`). nettool validates every
+  argument, enters the namespace, allows unprivileged ICMP sockets there (`net.ipv4.ping_group_range`,
+  as on the host) and runs the tool as the calling user. Ctrl-C stops a running command.
+
 ### Huawei VRP style (`vrp`)
 
 `vrp` is a second CLI on the same datastore and commit path, in Huawei VRP8 two-stage style. Both CLIs

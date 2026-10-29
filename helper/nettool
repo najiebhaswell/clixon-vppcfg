@@ -1,0 +1,162 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Najieb Haswell
+"""nettool: ping, traceroute, mtr, dig and nslookup for the rtr/vrp CLIs.
+
+Run through sudo (members of the clicon group, see /etc/sudoers.d/clixon-vppcfg) because entering the
+dataplane network namespace needs root. Every argument is validated here and the tool itself runs
+with the privileges of the calling user.
+
+  nettool [--ns dataplane|mgmt] [-4|-6] [--source IP] [--count N] [--size N | --datagram N] [--df]
+          ping|traceroute|mtr <host>
+  nettool [--server IP] [--type TYPE] dig|nslookup <name>
+
+dataplane (default for ping/traceroute/mtr): the router's routing table (BIRD/VPP) through linux-cp;
+nettool allows unprivileged ICMP sockets there (net.ipv4.ping_group_range, as on the host).
+mgmt: the host's management network. dig/nslookup always use mgmt, where the resolvers are; a host
+name for ping/traceroute/mtr is resolved there too and the address is used in the dataplane.
+"""
+import argparse
+import ipaddress
+import os
+import pwd
+import re
+import socket
+import sys
+
+NETNS = "/run/netns/dataplane"
+PING_GROUPS = "/proc/sys/net/ipv4/ping_group_range"
+HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,62})(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}))*\.?")
+RRTYPES = ("A", "AAAA", "ANY", "CAA", "CNAME", "DS", "DNSKEY", "MX", "NS", "PTR", "SOA", "SRV", "TXT")
+
+
+def die(msg):
+    print(f"% {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def ip(s):
+    try:
+        return ipaddress.ip_address(s)
+    except ValueError:
+        return None
+
+
+def name_or_ip(s):
+    if ip(s) is None and (len(s) > 253 or not HOSTNAME.fullmatch(s)):
+        raise argparse.ArgumentTypeError(f"{s} is not an IP address or a host name")
+    return s
+
+
+def bounded(lo, hi):
+    def conv(s):
+        if not s.isdigit() or not lo <= int(s) <= hi:
+            raise argparse.ArgumentTypeError(f"{s} is not between {lo} and {hi}")
+        return int(s)
+    return conv
+
+
+def address(s):
+    if ip(s) is None:
+        raise argparse.ArgumentTypeError(f"{s} is not an IP address")
+    return s
+
+
+def resolve(host, family):
+    """Address of host from the management resolvers (this process is still in the host namespace)."""
+    if ip(host) is not None:
+        return host
+    fam = {4: socket.AF_INET, 6: socket.AF_INET6}.get(family, socket.AF_UNSPEC)
+    try:
+        addr = socket.getaddrinfo(host, None, fam, socket.SOCK_RAW)[0][4][0]
+    except socket.gaierror as e:
+        die(f"Cannot resolve {host}: {e.strerror}")
+    print(f"Translating \"{host}\"... domain server ({addr}) [OK]")
+    return addr
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        # One line for the CLI user, not the usage text: "argument target: x is not ..." -> "x is not ..."
+        die(message.split(": ", 1)[-1] if message.startswith("argument ") else message)
+
+
+def main():
+    p = Parser(prog="nettool", allow_abbrev=False)
+    p.add_argument("--ns", choices=("dataplane", "mgmt"), default="dataplane")
+    fam = p.add_mutually_exclusive_group()
+    fam.add_argument("-4", dest="family", action="store_const", const=4)
+    fam.add_argument("-6", dest="family", action="store_const", const=6)
+    p.add_argument("--source", type=address)
+    p.add_argument("--count", type=bounded(1, 1000))
+    size = p.add_mutually_exclusive_group()
+    size.add_argument("--size", type=bounded(0, 65000), help="ICMP payload bytes")
+    size.add_argument("--datagram", type=bounded(48, 65000), help="whole IP packet bytes (Cisco 'size')")
+    p.add_argument("--df", action="store_true")
+    p.add_argument("--server", type=address)
+    p.add_argument("--type", choices=RRTYPES)
+    p.add_argument("tool", choices=("ping", "traceroute", "mtr", "dig", "nslookup"))
+    p.add_argument("target", type=name_or_ip)
+    a = p.parse_args()
+
+    if a.tool in ("dig", "nslookup"):
+        ns = "mgmt"
+        if a.tool == "dig":
+            cmd = ["dig"] + ([f"@{a.server}"] if a.server else [])
+            cmd += ["-x", a.target] if ip(a.target) else [a.target] + ([a.type] if a.type else [])
+        else:
+            cmd = ["nslookup"] + ([f"-type={a.type}"] if a.type else []) + [a.target] + ([a.server] if a.server else [])
+    else:
+        ns = a.ns
+        target = resolve(a.target, a.family)
+        v = ip(target).version
+        if a.family and a.family != v:
+            die(f"{target} is not an IPv{a.family} address")
+        if a.source and ip(a.source).version != v:
+            die(f"source {a.source} and destination {target} are not of the same IP version")
+        if a.tool == "ping":
+            cmd = ["ping", f"-{v}", "-n", "-W", "2", "-c", str(a.count or 5)]
+            if a.size is not None or a.datagram is not None:
+                cmd += ["-s", str(a.size if a.size is not None else a.datagram - (28 if v == 4 else 48))]
+            if a.df:
+                cmd += ["-M", "do"]
+            if a.source:
+                cmd += ["-I", a.source]
+        elif a.tool == "traceroute":
+            cmd = ["traceroute", f"-{v}", "-n", "-w", "2", "-q", "3"] + (["-s", a.source] if a.source else [])
+        else:
+            cmd = ["mtr", f"-{v}", "--report", "--report-wide", "-n", "-c", str(a.count or 10)]
+            cmd += ["-a", a.source] if a.source else []
+        cmd.append(target)
+
+    # Drop to the calling user once inside the namespace
+    uid = int(os.environ.get("SUDO_UID", os.getuid()))
+    gid = int(os.environ.get("SUDO_GID", os.getgid()))
+    try:
+        user = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        die("unknown calling user")
+    drop = ["setpriv", f"--reuid={uid}", f"--regid={gid}", "--init-groups", "--reset-env", "--"]
+    if os.getuid() == uid:
+        drop = []
+    if ns == "dataplane":
+        if os.getuid() != 0:
+            die("the dataplane namespace needs root: run through sudo (members of the clicon group)")
+        with open(NETNS) as f:
+            os.setns(f.fileno(), os.CLONE_NEWNET)
+        # ping_group_range is per namespace: allow unprivileged ICMP sockets as on the host, so
+        # ping runs as the calling user without raw-socket capabilities
+        with open(PING_GROUPS) as f:
+            groups = f.read().split()
+        if groups != ["0", "2147483647"]:
+            with open(PING_GROUPS, "w") as f:
+                f.write("0 2147483647")
+    argv = drop + cmd
+    os.environ["PATH"] = "/usr/sbin:/usr/bin:/sbin:/bin"
+    os.environ["USER"] = os.environ["LOGNAME"] = user
+    sys.stdout.flush()
+    os.execvp(argv[0], argv)
+
+
+if __name__ == "__main__":
+    main()

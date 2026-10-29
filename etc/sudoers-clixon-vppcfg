@@ -1,0 +1,4 @@
+# /etc/sudoers.d/clixon-vppcfg (installed by clixon-vppcfg)
+# CLI users (group clicon) may run ping/traceroute/mtr in the dataplane network namespace.
+# nettool validates every argument and runs the tool as the calling user.
+%clicon ALL=(root) NOPASSWD: /usr/local/libexec/clixon-vppcfg/nettool
