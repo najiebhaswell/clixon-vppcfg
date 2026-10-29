@@ -20,8 +20,35 @@ apply("Actions applied when this node permits a route") {
     cost("MED announced to the peer (lower is preferred)") <med:uint32>("MED"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med>$med</med></set></node></route-policy></routing>");
     community("Add a community; repeat for more") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community AA:NN, e.g. 65000:100") additive("Keep existing communities"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community>$comm</community></set></node></route-policy></routing>");
     large-community("Add a large community; repeat for more") <lc:string regexp:"[0-9]{1,10}:[0-9]{1,10}:[0-9]{1,10}">("Large community ASN:data1:data2, e.g. 65000:1:100") additive("Keep existing large communities"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><large-community>$lc</large-community></set></node></route-policy></routing>");
-    as-path("AS path") <asn:uint32 range[1:4294967295]>("AS number to prepend, usually the local AS") additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as>$asn</prepend-as><prepend-count nc:operation='remove'/></set></node></route-policy></routing>"); {
-        <count:uint8 range[1:10]>("Number of times, 1-10"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as>$asn</prepend-as><prepend-count>$count</prepend-count></set></node></route-policy></routing>");
+    as-path("AS path") <a1:uint32 range[1:4294967295]>("AS number to prepend; type it again to prepend it several times, e.g. 55666 55666 55666 additive") {
+        additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+        <a2:uint32 range[1:4294967295]>("Next AS number (9 more allowed)") {
+            additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+            <a3:uint32 range[1:4294967295]>("Next AS number (8 more allowed)") {
+                additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                <a4:uint32 range[1:4294967295]>("Next AS number (7 more allowed)") {
+                    additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                    <a5:uint32 range[1:4294967295]>("Next AS number (6 more allowed)") {
+                        additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                        <a6:uint32 range[1:4294967295]>("Next AS number (5 more allowed)") {
+                            additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                            <a7:uint32 range[1:4294967295]>("Next AS number (4 more allowed)") {
+                                additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                                <a8:uint32 range[1:4294967295]>("Next AS number (3 more allowed)") {
+                                    additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                                    <a9:uint32 range[1:4294967295]>("Next AS number (2 more allowed)") {
+                                        additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                                        <a10:uint32 range[1:4294967295]>("Next AS number (1 more allowed)") {
+                                            additive("Prepend to the existing path"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 undo("Undo a command") {
@@ -41,7 +68,7 @@ undo("Undo a command") {
         cost("Remove the MED action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med nc:operation='remove'/></set></node></route-policy></routing>");
         community("Remove a community") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community AA:NN, e.g. 65000:100"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community nc:operation='remove'>$comm</community></set></node></route-policy></routing>");
         large-community("Remove a large community") <lc:string regexp:"[0-9]{1,10}:[0-9]{1,10}:[0-9]{1,10}">("Large community ASN:data1:data2, e.g. 65000:1:100"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><large-community nc:operation='remove'>$lc</large-community></set></node></route-policy></routing>");
-        as-path("Remove the prepend action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as nc:operation='remove'/><prepend-count nc:operation='remove'/></set></node></route-policy></routing>");
+        as-path("Remove the prepend action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend nc:operation='remove'/></set></node></route-policy></routing>");
     }
 }
 quit("Return to the system view"), vc_if_exit("system");

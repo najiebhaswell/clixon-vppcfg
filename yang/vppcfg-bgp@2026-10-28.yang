@@ -246,11 +246,13 @@ module vppcfg-bgp {
                     leaf med { type uint32; }
                     leaf-list community { type community; }
                     leaf-list large-community { type large-community; }
-                    leaf prepend-as { type asn; }
-                    leaf prepend-count {
-                        type uint8 {
-                            range "1..10";
+                    leaf prepend {
+                        type string {
+                            pattern '[0-9]{1,10}( [0-9]{1,10}){0,9}';
                         }
+                        description "AS numbers put in front of the AS path, leftmost first (Cisco
+                                     'set as-path prepend 65000 65000', Huawei 'apply as-path 65000 65000
+                                     additive'). On EBGP sessions BIRD adds the local AS in front of these.";
                     }
                 }
             }

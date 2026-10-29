@@ -117,7 +117,7 @@ suggests the next free `loopN` and `BondEthernetN`.
 BR(config)# ip prefix-list OWN seq 10 permit 203.0.113.0/24
 BR(config)# route-map TRANSIT-OUT permit 10
 BR(config-route-map)# match ip address prefix-list OWN
-BR(config-route-map)# set as-path prepend 65000 repeat 2
+BR(config-route-map)# set as-path prepend 65000 65000
 BR(config-route-map)# exit
 BR(config)# route-map TRANSIT-IN permit 10
 BR(config-route-map)# set local-preference 100

@@ -20,8 +20,24 @@ set("Actions applied when this sequence permits a route") {
     metric("MED announced to the neighbor (lower is preferred)") <med:uint32>("MED"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med>$med</med></set></node></route-policy></routing>");
     community("Add a community; repeat for more") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community ASN:value, e.g. 65000:100") [additive("Keep existing communities (always the case)")], vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community>$comm</community></set></node></route-policy></routing>");
     large-community("Add a large community; repeat for more") <lc:string regexp:"[0-9]{1,10}:[0-9]{1,10}:[0-9]{1,10}">("Large community ASN:data1:data2, e.g. 65000:1:100") [additive("Keep existing large communities (always the case)")], vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><large-community>$lc</large-community></set></node></route-policy></routing>");
-    as-path("AS path") prepend("Prepend an AS to the path") <asn:uint32 range[1:4294967295]>("AS number, usually the local AS"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as>$asn</prepend-as><prepend-count nc:operation='remove'/></set></node></route-policy></routing>"); {
-        repeat("Prepend several times") <count:uint8 range[1:10]>("Number of times, 1-10"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as>$asn</prepend-as><prepend-count>$count</prepend-count></set></node></route-policy></routing>");
+    as-path("AS path") prepend("Prepend AS numbers to the path, e.g. set as-path prepend 55666 55666 55666") <a1:uint32 range[1:4294967295]>("AS number; type it again to prepend it several times"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+        <a2:uint32 range[1:4294967295]>("Next AS number (9 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+            <a3:uint32 range[1:4294967295]>("Next AS number (8 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+                <a4:uint32 range[1:4294967295]>("Next AS number (7 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+                    <a5:uint32 range[1:4294967295]>("Next AS number (6 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+                        <a6:uint32 range[1:4294967295]>("Next AS number (5 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+                            <a7:uint32 range[1:4294967295]>("Next AS number (4 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+                                <a8:uint32 range[1:4294967295]>("Next AS number (3 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+                                    <a9:uint32 range[1:4294967295]>("Next AS number (2 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>"); {
+                                        <a10:uint32 range[1:4294967295]>("Next AS number (1 more allowed)"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend>$a1[ $a2][ $a3][ $a4][ $a5][ $a6][ $a7][ $a8][ $a9][ $a10]</prepend></set></node></route-policy></routing>");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 no("Negate a command") {
@@ -40,7 +56,7 @@ no("Negate a command") {
         metric("Remove the MED action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med nc:operation='remove'/></set></node></route-policy></routing>");
         community("Remove a community") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community ASN:value, e.g. 65000:100"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community nc:operation='remove'>$comm</community></set></node></route-policy></routing>");
         large-community("Remove a large community") <lc:string regexp:"[0-9]{1,10}:[0-9]{1,10}:[0-9]{1,10}">("Large community ASN:data1:data2, e.g. 65000:1:100"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><large-community nc:operation='remove'>$lc</large-community></set></node></route-policy></routing>");
-        as-path("AS path") prepend("Remove the prepend action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend-as nc:operation='remove'/><prepend-count nc:operation='remove'/></set></node></route-policy></routing>");
+        as-path("AS path") prepend("Remove the prepend action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><prepend nc:operation='remove'/></set></node></route-policy></routing>");
     }
 }
 exit("Return to global configuration mode"), vc_if_exit("configure");

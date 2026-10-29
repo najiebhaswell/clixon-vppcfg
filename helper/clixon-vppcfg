@@ -351,7 +351,7 @@ BGP_LISTS = {"network": "prefix", "peer-group": "name", "neighbor": "address", "
              "route-policy": "name", "node": "seq"}
 BGP_LEAFLISTS = {"community", "large-community"}
 BGP_INTS = {"local-as", "remote-as", "multihop", "hold-time", "keepalive", "max-prefix", "seq", "ge", "le",
-            "as-path-contains", "origin-as", "local-preference", "med", "prepend-as", "prepend-count"}
+            "as-path-contains", "origin-as", "local-preference", "med"}
 BGP_BOOLS = {"activate", "next-hop-self", "bfd", "shutdown"}
 PEER_KEYS = ["remote-as", "description", "source-address", "password", "multihop", "bfd", "hold-time",
              "keepalive", "shutdown"]
@@ -472,8 +472,8 @@ def bgp_errors(r):
                 if not lc_ok(c):
                     errs.append(f"{where}: large community {c}: each part must be at most 4294967295")
             st = node.get("set", {})
-            if ("prepend-count" in st or "prepend-as" in st) and "prepend-as" not in st and "local-as" not in bgp:
-                errs.append(f"{where}: AS-path prepend needs an AS number or the local AS")
+            if any(not 1 <= int(a) <= 0xFFFFFFFF for a in st.get("prepend", "").split()):
+                errs.append(f"{where}: AS-path prepend {st['prepend']}: AS numbers must be 1..4294967295")
 
     for kind, objs, prefix in (("prefix-list", pls, "cx_pl_"), ("as-path-list", apls, "cx_ap_"),
                                ("route-policy", rps, "cx_rp_")):
@@ -668,8 +668,8 @@ def render_bird(r):
                     body.append(f"bgp_community.add({bird_community(c)});")
                 for c in st.get("large-community", []):
                     body.append(f"bgp_large_community.add({bird_large_community(c)});")
-                if "prepend-as" in st or "prepend-count" in st:
-                    body += [f"bgp_path.prepend({st.get('prepend-as', las)});"] * st.get("prepend-count", 1)
+                # prepend() adds in front: the last AS first, so the first ends up leftmost
+                body += [f"bgp_path.prepend({a});" for a in reversed(st.get("prepend", "").split())]
                 body.append("accept;")
             else:
                 body.append("reject;")
@@ -1100,9 +1100,8 @@ def cisco_bgp_lines(r):
                 out.append(f" set community {' '.join(st['community'])} additive")
             if st.get("large-community"):
                 out.append(f" set large-community {' '.join(st['large-community'])} additive")
-            if "prepend-as" in st or "prepend-count" in st:
-                out.append(f" set as-path prepend {st.get('prepend-as', bgp.get('local-as', '?'))}"
-                           + (f" repeat {st['prepend-count']}" if st.get("prepend-count", 1) > 1 else ""))
+            if "prepend" in st:
+                out.append(f" set as-path prepend {st['prepend']}")
             out.append("!")
     return out
 
@@ -1222,9 +1221,8 @@ def vrp_bgp_lines(r, section=None):
                 out.append(f" apply community {c} additive")
             for c in st.get("large-community", []):
                 out.append(f" apply large-community {c} additive")
-            if "prepend-as" in st or "prepend-count" in st:
-                out.append(f" apply as-path {st.get('prepend-as', bgp.get('local-as', '?'))} additive"
-                           + (f" {st['prepend-count']}" if st.get("prepend-count", 1) > 1 else ""))
+            if "prepend" in st:
+                out.append(f" apply as-path {st['prepend']} additive")
     return out
 
 
