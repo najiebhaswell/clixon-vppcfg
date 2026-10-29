@@ -27,6 +27,7 @@
 #include <strings.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cligen/cligen.h>
@@ -885,8 +886,9 @@ vc_end(clixon_handle h,
     const char *target = arg_str(argv, 0) ? arg_str(argv, 0) : "exec";
     int         ch = has_changes(h);
 
-    if (ch < 0)
-        return -1;
+    if (ch < 0)  /* backend unreachable: never trap the user in a mode */
+        cligen_output(stdout, _vrp ? "Warning: could not check for uncommitted changes.\n"
+                                   : "%% Warning: could not check for uncommitted changes.\n");
     if (ch == 1) {
         if (_vrp)
             cligen_output(stdout, "Error: Uncommitted configurations found (see 'display configuration "
@@ -1686,6 +1688,22 @@ vc_errmsg(clixon_handle        h,
 
     if (type != LOG_TYPE_ERR)
         return 0;
+    va_copy(ap2, ap);
+    vsnprintf(buf, sizeof(buf), format, ap2);
+    va_end(ap2);
+    /* Clixon 7.9 reports configuration that does not fit the CLI's YANG model (the backend was
+     * upgraded while this CLI kept running) as "Expected rpc-error tag but none found". */
+    if (strstr(buf, "Expected rpc-error tag") != NULL) {
+        static time_t shown;  /* once per command line, not for every RPC of it */
+        if (time(NULL) - shown < 2)
+            return 0;
+        shown = time(NULL);
+        cligen_output(stdout, _vrp ? "Error: this CLI was started before clixon-vppcfg was upgraded and cannot read the new configuration.\n"
+                                     "       Leave with 'quit' and start 'vrp' again.\n"
+                                   : "%% This CLI was started before clixon-vppcfg was upgraded and cannot read the new configuration.\n"
+                                     "%% Leave with 'end' and 'exit', then start 'rtr' again.\n");
+        return 0;
+    }
     if (xerr != NULL && (msg = xml_find_body(xerr, "error-message")) != NULL) {
         if (strncmp(format, "Commit", 6) == 0)
             what = "Commit";
@@ -1694,9 +1712,6 @@ vc_errmsg(clixon_handle        h,
         cligen_output(stdout, _vrp ? "Error: %s failed: %s\n" : "%% %s failed: %s\n", what, msg);
         return 0;
     }
-    va_copy(ap2, ap);
-    vsnprintf(buf, sizeof(buf), format, ap2);
-    va_end(ap2);
     cligen_output(stdout, _vrp ? "Error: %s\n" : "%% %s\n", buf);
     return 0;
 }
