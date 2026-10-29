@@ -63,6 +63,29 @@ sudo usermod -aG clicon,vpp,bird <user>
 sudo systemctl daemon-reload && sudo systemctl enable --now clixon-vppcfg
 ```
 
+### Debian packages
+
+`make deb` (or `packaging/build-debs.sh [--skip-clixon] [OUTDIR]`) builds three packages in `dist/`:
+`cligen` and `clixon` 7.9.0 from the upstream tags, and `clixon-vppcfg`, versioned
+`<VERSION>+git<commits>.<hash>`. They use the same `/usr/local` layout as `make install`, so they
+replace a source installation in place. Build host: build-essential, flex, bison, libssl-dev,
+libnghttp2-dev, git, dpkg-dev.
+
+```bash
+sudo apt install ./dist/cligen_*.deb ./dist/clixon_*.deb ./dist/clixon-vppcfg_*.deb
+```
+
+- vppcfg is not a Debian package; install it separately (`/usr/local/sbin/vppcfg`). The package warns
+  when it is missing.
+- On a new installation the service is installed but not started: import the configuration first
+  (below), then `systemctl enable --now clixon-vppcfg`.
+- An upgrade restarts the backend: commit or discard pending changes first, and restart open
+  `rtr`/`vrp` sessions afterwards.
+- The datastore `/var/lib/clixon-vppcfg` is kept on removal and purge.
+- Replacing a `make install`: remove `/etc/systemd/system/clixon-vppcfg.service` (the package ships
+  `/usr/lib/systemd/system/clixon-vppcfg.service`) and run `systemctl daemon-reload` and
+  `systemctl reenable clixon-vppcfg`.
+
 For BGP, the hand-written `/etc/bird/bird.conf` keeps the base (device, kernel, and any filters you
 write by hand) and includes the generated file as its last line. Remove `router id` from bird.conf;
 it is set with `router-id` (rtr) or `router id` (vrp):
@@ -138,7 +161,7 @@ BR(config)# commit confirmed 5
 ```
 
 The same in `vrp`: `ip ip-prefix OWN index 10 permit 203.0.113.0 24`, `route-policy TRANSIT-OUT permit node 10`
-with `if-match ip-prefix OWN` and `apply as-path 65000 additive 2`, `bgp 65000` with `group TRANSIT external`,
+with `if-match ip-prefix OWN` and `apply as-path 65000 65000 additive`, `bgp 65000` with `group TRANSIT external`,
 `peer TRANSIT as-number 64500`, `peer 198.51.100.1 group TRANSIT`, and in `ipv4-family unicast`
 `peer TRANSIT route-policy TRANSIT-IN import`, `peer TRANSIT route-limit 1500000`.
 

@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+set -e
+
+case "$1" in
+remove|purge)
+    if [ -d /run/systemd/system ]; then
+        [ "$1" = purge ] && systemctl disable clixon-vppcfg >/dev/null 2>&1 || true
+        systemctl daemon-reload || true
+    fi
+    if [ "$1" = purge ] && [ -d /var/lib/clixon-vppcfg ]; then
+        # The datastore is the router's configuration: never deleted automatically.
+        echo "clixon-vppcfg: /var/lib/clixon-vppcfg (the configuration datastore) was kept." >&2
+    fi
+    ;;
+esac
+
+exit 0

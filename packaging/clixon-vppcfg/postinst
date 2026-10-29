@@ -1,0 +1,47 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+set -e
+
+case "$1" in
+configure)
+    getent group clicon >/dev/null || addgroup --system --quiet clicon
+    install -d -m 0750 -o root -g clicon /var/lib/clixon-vppcfg
+    chmod 0440 /etc/sudoers.d/clixon-vppcfg
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+    fi
+    if [ ! -x /usr/local/sbin/vppcfg ]; then
+        echo "clixon-vppcfg: WARNING: /usr/local/sbin/vppcfg not found." >&2
+        echo "  Install vppcfg (https://github.com/pimvanpelt/vppcfg) before starting clixon-vppcfg." >&2
+    fi
+    if [ -n "$2" ]; then
+        # Upgrade: load the new plugins and YANG models. Uncommitted candidate changes are lost,
+        # and open rtr/vrp sessions must be restarted.
+        if [ -d /run/systemd/system ] && systemctl is-active --quiet clixon-vppcfg; then
+            systemctl restart clixon-vppcfg || true
+            echo "clixon-vppcfg: backend restarted; restart open rtr/vrp sessions." >&2
+        fi
+    elif [ -s /var/lib/clixon-vppcfg/running_db ]; then
+        # First package install over a source installation: keep the datastore and the service as they are
+        echo "clixon-vppcfg: existing datastore in /var/lib/clixon-vppcfg kept." >&2
+        if [ -d /run/systemd/system ] && systemctl is-active --quiet clixon-vppcfg; then
+            echo "  The backend still runs the previous build: restart clixon-vppcfg to load this one" >&2
+            echo "  (uncommitted changes are lost; restart open rtr/vrp sessions)." >&2
+        fi
+    else
+        cat >&2 <<'EOF'
+clixon-vppcfg installed. The service is not started yet: on start it applies the
+(empty) running datastore to VPP. First import the current configuration:
+
+  sudo /usr/local/libexec/clixon-vppcfg/clixon-vppcfg import /etc/vpp/vppcfg.yaml \
+      | sudo tee /var/lib/clixon-vppcfg/running_db >/dev/null
+  sudo systemctl enable --now clixon-vppcfg
+  sudo adduser <operator> clicon      # also vpp and bird, then log in again
+
+See /usr/local/share/doc/clixon-vppcfg/README.md.
+EOF
+    fi
+    ;;
+esac
+
+exit 0

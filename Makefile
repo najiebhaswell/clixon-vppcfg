@@ -2,9 +2,11 @@
 # clixon-vppcfg: Clixon (YANG/CLI/NETCONF) di atas vppcfg.
 PREFIX  ?= /usr/local
 LIBDIR  := $(PREFIX)/lib/clixon-vppcfg
+# Packages install the unit to /usr/lib/systemd/system (packaging/build-debs.sh)
+UNITDIR ?= /etc/systemd/system
 CFLAGS  ?= -O2 -g -Wall -Wextra -Wno-unused-parameter
-CFLAGS  += -fPIC -I$(PREFIX)/include
-LDFLAGS += -L$(PREFIX)/lib
+override CFLAGS  += -fPIC -I$(PREFIX)/include
+override LDFLAGS += -L$(PREFIX)/lib
 
 all: build/backend_vppcfg.so build/cli_vppcfg.so
 
@@ -29,14 +31,17 @@ install: all
 	install -m 644 yang/*.yang $(DESTDIR)$(PREFIX)/share/clixon-vppcfg/yang/
 	install -D -m 755 helper/clixon-vppcfg $(DESTDIR)$(PREFIX)/libexec/clixon-vppcfg/clixon-vppcfg
 	install -D -m 755 helper/nettool $(DESTDIR)$(PREFIX)/libexec/clixon-vppcfg/nettool
-	visudo -cqf etc/sudoers-clixon-vppcfg
+	if command -v visudo >/dev/null; then visudo -cqf etc/sudoers-clixon-vppcfg; fi
 	install -D -m 440 etc/sudoers-clixon-vppcfg $(DESTDIR)/etc/sudoers.d/clixon-vppcfg
 	install -D -m 755 bin/rtr $(DESTDIR)$(PREFIX)/bin/rtr
 	install -D -m 755 bin/vrp $(DESTDIR)$(PREFIX)/bin/vrp
 	install -D -m 644 etc/vppcfg.xml $(DESTDIR)/etc/clixon/vppcfg.xml
-	install -D -m 644 systemd/clixon-vppcfg.service $(DESTDIR)/etc/systemd/system/clixon-vppcfg.service
+	install -D -m 644 systemd/clixon-vppcfg.service $(DESTDIR)$(UNITDIR)/clixon-vppcfg.service
+
+deb:
+	packaging/build-debs.sh
 
 clean:
-	rm -rf build
+	rm -rf build dist
 
-.PHONY: all install clean
+.PHONY: all install deb clean
