@@ -329,6 +329,13 @@ def cmd_apply(xml_path):
     r = vppcfg("plan", "--novpp", "-c", YAML_PATH, "-o", BOOT_PATH)
     if r.returncode != 0:
         die("Applied to VPP, but failed to write the boot file " + BOOT_PATH + ":\n" + clean_errors(r.stderr))
+    # plan --novpp does not tag physical interfaces (it creates nothing for them); without the tags
+    # 'vppcfg plan' is not empty after every VPP restart
+    phys = [n for n in cfg.get("interfaces", {}) if "." not in n]
+    if phys:
+        with open(BOOT_PATH, "a") as f:
+            f.write(f"comment {{ clixon-vppcfg: tag {len(phys)} physical interface(s) }}\n")
+            f.writelines(f"set interface tag {n} vppcfg\n" for n in phys)
     if old != text:
         os.makedirs(HISTORY_DIR, exist_ok=True)
         shutil.copy(YAML_PATH, os.path.join(HISTORY_DIR, time.strftime("%Y%m%d-%H%M%S") + ".yaml"))
