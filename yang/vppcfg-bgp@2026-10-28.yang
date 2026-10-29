@@ -134,6 +134,14 @@ module vppcfg-bgp {
                 key address;
                 leaf address { type ip-address; }
                 leaf peer-group { type object-name; }
+                leaf name {
+                    type string {
+                        length "1..32";
+                        pattern '[A-Za-z][A-Za-z0-9_]*';
+                    }
+                    description "Name of the session in BIRD (birdc show protocols).
+                                 Default: cx_ followed by the address. Renaming restarts the session.";
+                }
                 uses peer-settings;
             }
         }

@@ -11,6 +11,7 @@ neighbor("Configure a BGP neighbor or peer group") (<peer:string vc_expand_names
     peer-group("Create a peer group with this name"), vc_edit("<routing><bgp><peer-group><name>$peer</name></peer-group></bgp></routing>"); {
         (<group:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Peer group")|<group:string>("Peer group name")), vc_edit("<routing><bgp><neighbor><address>$peer</address><peer-group>$group</peer-group></neighbor></bgp></routing>");
     }
+    name("Name of the session in BIRD (birdc show protocols; default cx_<address>); renaming restarts the session") <pname:string regexp:"[A-Za-z][A-Za-z0-9_]{0,31}">("Name: letter first, then letters, digits or _ (up to 32)"), vc_edit("<routing><bgp><neighbor><address>$peer</address><name>$pname</name></neighbor></bgp></routing>");
     description("Neighbor description") <text:rest>("Up to 80 characters, no double quotes"), vc_edit("<routing><bgp><PEER><description>$text</description></PEER></bgp></routing>");
     update-source("Local address used for the session") <src:string regexp:"[0-9a-fA-F:.]+">("Local IPv4 or IPv6 address"), vc_edit("<routing><bgp><PEER><source-address>$src</source-address></PEER></bgp></routing>");
     password("TCP MD5 password; the peer must use the same") <pw:string regexp:"[!#-~]{1,80}">("Password: printable characters, no spaces or double quotes"), vc_edit("<routing><bgp><PEER><password>$pw</password></PEER></bgp></routing>");
@@ -33,6 +34,7 @@ no("Negate a command") {
         peer-group("Remove the peer group"), vc_edit("<routing><bgp><PEER nc:operation='remove'></PEER></bgp></routing>"); {
             (<group:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Peer group")|<group:string>("Peer group name")), vc_edit("<routing><bgp><neighbor><address>$peer</address><peer-group nc:operation='remove'/></neighbor></bgp></routing>");
         }
+        name("Revert to the default session name cx_<address> (restarts the session)"), vc_edit("<routing><bgp><neighbor><address>$peer</address><name nc:operation='remove'/></neighbor></bgp></routing>");
         description("Remove the description"), vc_edit("<routing><bgp><PEER><description nc:operation='remove'/></PEER></bgp></routing>");
         update-source("Remove the local address"), vc_edit("<routing><bgp><PEER><source-address nc:operation='remove'/></PEER></bgp></routing>");
         password("Remove the password"), vc_edit("<routing><bgp><PEER><password nc:operation='remove'/></PEER></bgp></routing>");

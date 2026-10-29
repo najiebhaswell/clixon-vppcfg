@@ -469,6 +469,7 @@ def bgp_errors(r):
 
     for name, g in bgp.get("peer-group", {}).items():
         check_peer("peer-group", name, g)
+    protos = {}
     for addr, n in bgp.get("neighbor", {}).items():
         if not is_ip(addr):
             errs.append(f"neighbor {addr}: not an IP address")
@@ -481,6 +482,11 @@ def bgp_errors(r):
             errs.append(f"neighbor {addr}: remote AS is not set (on the neighbor or its peer-group)")
         if not any(af_active(addr, af, eff[af]) for af in ("ipv4", "ipv6")):
             errs.append(f"neighbor {addr}: no address family is activated")
+        proto = bird_proto(addr, n)
+        if proto in protos or proto in ("cx_bfd", "cx_originate4", "cx_originate6"):
+            errs.append(f"neighbor {addr}: BIRD name {proto} is already used"
+                        + (f" by neighbor {protos[proto]}" if proto in protos else " by clixon-vppcfg"))
+        protos[proto] = addr
         if eff.get("bfd") and "multihop" in eff and "source-address" not in eff:
             errs.append(f"neighbor {addr}: BFD on a multihop session needs a source address "
                         "(update-source / connect-interface)")
@@ -491,8 +497,9 @@ def bird_ident(prefix, s):
     return prefix + re.sub(r"[^A-Za-z0-9]", "_", str(s))
 
 
-def bird_proto(addr):
-    return bird_ident("cx_", addr)
+def bird_proto(addr, n=None):
+    """BIRD protocol name of a neighbor: its configured name, else cx_<address>."""
+    return (n or {}).get("name") or bird_ident("cx_", addr)
 
 
 def bird_pattern(prefix, ge=None, le=None):
@@ -575,7 +582,7 @@ def render_bird(r):
         out += ["protocol bfd cx_bfd {", "}", ""]
     for addr in sorted(neighbors, key=lambda a: (ipaddress.ip_address(a).version, ipaddress.ip_address(a))):
         e = effs[addr]
-        out.append(f"protocol bgp {bird_proto(addr)} {{")
+        out.append(f"protocol bgp {bird_proto(addr, neighbors[addr])} {{")
         if "description" in e:
             out.append(f'  description "{e["description"]}";')
         out.append(f"  local as {las};")
@@ -677,7 +684,19 @@ def bird_apply(text):
 
 
 def cmd_bgp_neighbor(peer):
-    name = bird_proto(peer) if is_ip(peer) else peer
+    name = peer
+    if is_ip(peer):
+        # The session name may be configured: find the protocol with this neighbor address.
+        r = subprocess.run([BIRDC, "show", "protocols", "all"], capture_output=True, text=True)
+        name, proto = bird_proto(peer), None
+        for line in r.stdout.splitlines():
+            m = re.match(r"(\S+)\s+BGP\s", line)
+            if m:
+                proto = m.group(1)
+            m = re.match(r"\s+Neighbor address:\s+(\S+)", line)
+            if m and proto and m.group(1).split("%")[0] == str(ipaddress.ip_address(peer)):
+                name = proto
+                break
     r = subprocess.run([BIRDC, "show", "protocols", "all", name], capture_output=True, text=True)
     sys.stdout.write(r.stdout + r.stderr)
 
@@ -879,6 +898,8 @@ def cisco_bgp_lines(r):
                 out.append(f" neighbor {name} remote-as {p['remote-as']}")
             if not group and "peer-group" in p:
                 out.append(f" neighbor {name} peer-group {p['peer-group']}")
+            if "name" in p:
+                out.append(f" neighbor {name} name {p['name']}")
             if "description" in p:
                 out.append(f" neighbor {name} description {p['description']}")
             if "source-address" in p:
@@ -979,6 +1000,8 @@ def vrp_bgp_lines(r, section=None):
                 out.append(f" peer {name} as-number {p['remote-as']}")
             if not group and "peer-group" in p:
                 out.append(f" peer {name} group {p['peer-group']}")
+            if "name" in p:
+                out.append(f" peer {name} name {p['name']}")
             if "description" in p:
                 out.append(f" peer {name} description {p['description']}")
             if "source-address" in p:

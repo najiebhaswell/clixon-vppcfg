@@ -145,7 +145,11 @@ with `if-match ip-prefix OWN` and `apply as-path 65000 additive 2`, `bgp 65000` 
 - Peers without a route-map accept and announce nothing (RFC 8212). `neighbor X bird-filter <name> in|out`
   (`peer X bird-filter <name> import|export`) uses a filter written by hand in bird.conf instead.
 - Neighbor settings override peer-group settings; the merged result is rendered per neighbor
-  (`protocol bgp cx_<address>` in BIRD).
+  (`protocol bgp cx_<address>` in BIRD; `neighbor X name TRANSIT_A` / `peer X name TRANSIT_A` gives the
+  session its own name in `birdc show protocols`; renaming restarts that session).
+- A neighbor must get a remote AS (or a peer group) before other settings, a peer group must exist
+  before it is used, and the local AS can only be changed after `no router bgp` / `undo bgp`, as on
+  IOS and VRP.
 - `network` prefixes are originated as blackhole static routes (`cx_originate4/6`); they are installed
   in VPP through the kernel protocol and announced where an export policy permits them.
 - Before anything is applied the candidate is checked for missing route-maps, prefix-lists and

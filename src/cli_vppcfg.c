@@ -1027,6 +1027,11 @@ tpl_check(clixon_handle h,
     cvec   *names;
     int     refused = 0;
 
+    if (peer != NULL && !isip && strstr(tpl, "<address>$peer</address>") != NULL) {
+        user_error(_vrp ? "%s is not an IP address; this setting applies to a peer, not a group"
+                        : "%s is not an IP address; this setting applies to a neighbor, not a peer group", peer);
+        return 1;
+    }
     if (peer != NULL && (strstr(tpl, "<PEER") != NULL || strstr(tpl, "<address>$peer</address>") != NULL) &&
         !(isip && (strstr(tpl, "<remote-as>$asn</remote-as>") != NULL ||
                    strstr(tpl, "<peer-group>$group</peer-group>") != NULL)) &&
