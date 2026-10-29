@@ -9,6 +9,7 @@ display("Display information") {
         changes("Uncommitted changes: candidate compared to running"), vc_show_diff("vrp");
     }
     interface("Interface state, MTU and counters (all interfaces, or one)") [(<ifname:string vc_expand_ifs("all", "vrp")>("Interface name")|<ifname:string>("Interface name"))], vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "interface", "@ifname");
+    interface("Interface state, MTU and counters (all interfaces, or one)") brief("Summary of all interfaces: state and IP addresses"), vc_ip_brief("vrp");
     ip("IPv4 information") {
         interface("Interface information") brief("Interfaces with IP addresses and state"), vc_ip_brief("vrp");
         routing-table("IPv4 forwarding table (VPP FIB)") {
