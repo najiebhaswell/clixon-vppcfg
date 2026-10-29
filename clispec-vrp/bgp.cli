@@ -3,7 +3,7 @@
 CLICON_MODE="system";
 CLICON_PLUGIN="cli_vppcfg";
 
-bgp("Enter the BGP view (BIRD)") <asn:uint32 range[1:4294967295]>("Local AS number"), vc_enter("vrp-bgp", "<routing><bgp><local-as>$asn</local-as></bgp></routing>");
+bgp("Enter the BGP view (BIRD)") (<asn:string vc_expand_names("/bgp:routing/bgp:bgp", "local-as", "Configured local AS")>("Local AS number")|<asn:uint32 range[1:4294967295]>("Local AS number")), vc_enter("vrp-bgp", "<routing><bgp><local-as>$asn</local-as></bgp></routing>");
 router("Router") id("Router ID used by BIRD (also the BGP identifier)") <rid:ipv4addr>("X.X.X.X"), vc_edit("<routing><router-id>$rid</router-id></routing>");
 ip("IP") {
     ip-prefix("IPv4 prefix list (lowest index first, implicit deny at the end)") <name:string regexp:"[A-Za-z][A-Za-z0-9_-]{0,47}">("Prefix list name") index("Entry index") <seq:uint32 range[1:4294967295]>("Index; lower is evaluated first") (<action:string keyword:permit>("Permit matching routes")|<action:string keyword:deny>("Deny matching routes")) <ip:ipv4addr>("IPv4 address") <len:uint8 range[0:32]>("Mask length") [greater-equal("Minimum mask length") <ge:uint8 range[1:32]>("Minimum length")] [less-equal("Maximum mask length") <le:uint8 range[1:32]>("Maximum length")], vc_edit("<routing><prefix-list><name>$name</name><entry nc:operation='replace'><seq>$seq</seq><action>$action</action><prefix>$ip/$len</prefix>[<ge>$ge</ge>][<le>$le</le>]</entry></prefix-list></routing>");
@@ -12,7 +12,7 @@ ip("IP") {
 }
 route-policy("Route policy: policy for routes received from or announced to BGP peers") <name:string regexp:"[A-Za-z][A-Za-z0-9_-]{0,47}">("Route policy name") (<action:string keyword:permit>("Permit matching routes")|<action:string keyword:deny>("Deny matching routes")) node("Policy node") <seq:uint32 range[1:4294967295]>("Node number; lower is evaluated first"), vc_enter("vrp-rpolicy", "<routing><route-policy><name>$name</name><node><seq>$seq</seq><action>$action</action></node></route-policy></routing>", "rp=$name", "rseq=$seq");
 undo("Undo a command") {
-    bgp("Remove the whole BGP configuration (all peers, networks)") [<asn:uint32 range[1:4294967295]>("Local AS number")], vc_edit("<routing><bgp nc:operation='remove'/></routing>");
+    bgp("Remove the whole BGP configuration (all peers, networks)") [(<asn:string vc_expand_names("/bgp:routing/bgp:bgp", "local-as", "Configured local AS")>("Local AS number")|<asn:uint32 range[1:4294967295]>("Local AS number"))], vc_edit("<routing><bgp nc:operation='remove'/></routing>");
     router("Router") id("Remove the router ID (BIRD then picks one from the interfaces)"), vc_edit("<routing><router-id nc:operation='remove'/></routing>");
     ip("IP") {
         ip-prefix("Remove a prefix list or one entry") (<pl:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "IP prefix list")>("IP prefix list")|<pl:string>("IP prefix list name")), vc_edit("<routing><prefix-list nc:operation='remove'><name>$pl</name></prefix-list></routing>"); {

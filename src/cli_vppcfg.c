@@ -971,10 +971,109 @@ tpl_expand(cvec       *cvv,
     return 0;
 }
 
+/*! Values of leaf key of the BGP objects at xpath (bgp: prefix) in the candidate, added to out. */
+static int
+cand_names(clixon_handle h,
+           const char   *xpath,
+           const char   *key,
+           cvec         *out)
+{
+    cxobj  *xt = NULL;
+    cxobj **vec = NULL;
+    cvec   *nsc = xml_nsctx_init("bgp", NS_BGP);
+    size_t  len = 0;
+    size_t  i;
+    char   *b;
+
+    if (clicon_rpc_get_config(h, NULL, "candidate", xpath, nsc, NULL, &xt) == 0 && xt != NULL &&
+        xpath_vec(xt, nsc, "%s", &vec, &len, xpath) == 0)
+        for (i = 0; i < len; i++)
+            if ((b = xml_find_body(vec[i], key)) != NULL)
+                cvec_add_string(out, NULL, b);
+    free(vec);
+    cvec_free(nsc);
+    xml_free(xt);
+    return 0;
+}
+
+/*! 1 if a neighbor (isip) or peer group with this address/name is in the candidate. */
+static int
+bgp_peer_exists(clixon_handle h,
+                const char   *peer,
+                int           isip)
+{
+    cvec   *names = cvec_new(0);
+    cg_var *cv = NULL;
+    int     found = 0;
+
+    cand_names(h, isip ? "/bgp:routing/bgp:bgp/bgp:neighbor" : "/bgp:routing/bgp:bgp/bgp:peer-group",
+               isip ? "address" : "name", names);
+    while (!found && (cv = cvec_each(names, cv)) != NULL)
+        found = strcasecmp(cv_string_get(cv), peer) == 0;
+    cvec_free(names);
+    return found;
+}
+
+/*! Refuse a template that would configure a BGP peer or group before it exists, or change the
+ * local AS, like the router CLIs do. @retval 1 refused (message printed), 0 OK */
+static int
+tpl_check(clixon_handle h,
+          cvec         *cvv,
+          const char   *tpl,
+          const char   *peer,
+          int           isip)
+{
+    char   *v;
+    cvec   *names;
+    int     refused = 0;
+
+    if (peer != NULL && (strstr(tpl, "<PEER") != NULL || strstr(tpl, "<address>$peer</address>") != NULL) &&
+        !(isip && (strstr(tpl, "<remote-as>$asn</remote-as>") != NULL ||
+                   strstr(tpl, "<peer-group>$group</peer-group>") != NULL)) &&
+        !bgp_peer_exists(h, peer, isip)) {
+        if (isip)
+            user_error(_vrp ? "The peer %s does not exist; create it first with 'peer %s as-number <asn>'"
+                            : "Neighbor %s does not exist; configure 'neighbor %s remote-as <asn>' first",
+                       peer, peer);
+        else
+            user_error(_vrp ? "%s is not an IP address and no peer group has that name; create the group first with 'group %s'"
+                            : "%s is not an IP address and no peer group has that name; create the group first with 'neighbor %s peer-group'",
+                       peer, peer);
+        return 1;
+    }
+    if (strstr(tpl, "<peer-group>$group</peer-group>") != NULL && (v = tpl_value(cvv, "group")) != NULL) {
+        if (!bgp_peer_exists(h, v, 0)) {
+            user_error(_vrp ? "The peer group %s does not exist; create it first with 'group %s'"
+                            : "Peer group %s does not exist; create it first with 'neighbor %s peer-group'", v, v);
+            refused = 1;
+        }
+        free(v);
+        if (refused)
+            return 1;
+    }
+    if (peer != NULL && isip && strstr(tpl, "<peer-group><name>$peer</name>") != NULL) {
+        user_error("A peer group name must start with a letter");
+        return 1;
+    }
+    if (strstr(tpl, "<local-as>$asn</local-as>") != NULL && (v = tpl_value(cvv, "asn")) != NULL) {
+        names = cvec_new(0);
+        cand_names(h, "/bgp:routing/bgp:bgp", "local-as", names);
+        if (cvec_len(names) > 0 && strcmp(cv_string_get(cvec_i(names, 0)), v) != 0) {
+            user_error(_vrp ? "BGP is already configured with AS %s; to change the AS number, 'undo bgp' first"
+                            : "BGP is already configured with AS %s; to change the AS number, 'no router bgp' first",
+                       cv_string_get(cvec_i(names, 0)));
+            refused = 1;
+        }
+        cvec_free(names);
+        free(v);
+    }
+    return refused;
+}
+
 /*! Apply a configuration template from a clispec to the candidate (edit-config merge).
  * <PEER ...>...</PEER> becomes <neighbor><address>$peer</address>...</neighbor> when $peer is an IP
  * address, otherwise <peer-group><name>$peer</name>...</peer-group>. The xmlns of the module (ns)
- * is added to the first element. */
+ * is added to the first element. @retval 1 refused (message printed), 0 OK, -1 error */
 static int
 tpl_edit(clixon_handle h,
          cvec         *cvv,
@@ -996,6 +1095,10 @@ tpl_edit(clixon_handle h,
         struct in_addr  a4;
         isip = inet_pton(AF_INET, peer, &a4) == 1 || inet_pton(AF_INET6, peer, &a6) == 1;
     }
+    if (tpl_check(h, cvv, tpl, peer, isip)) {
+        ret = 1;
+        goto done;
+    }
     /* Rewrite PEER tags */
     for (p = tpl; *p; ) {
         if (strncmp(p, "<PEER", 5) == 0 && (gt = strchr(p, '>')) != NULL) {
@@ -1012,7 +1115,7 @@ tpl_edit(clixon_handle h,
     }
     if (tpl_expand(cvv, cbuf_get(pre), strlen(cbuf_get(pre)), body, missing, sizeof(missing)) < 0) {
         user_error("Missing value for %s", missing);
-        ret = 0;
+        ret = 1;
         goto done;
     }
     /* Add the module namespace to the first element */
@@ -1041,7 +1144,7 @@ vc_edit(clixon_handle h,
         cvec         *cvv,
         cvec         *argv)
 {
-    return tpl_edit(h, cvv, arg_str(argv, 0), NS_BGP);
+    return tpl_edit(h, cvv, arg_str(argv, 0), NS_BGP) < 0 ? -1 : 0;
 }
 
 /* Enter a BGP or route-policy mode: argv = (mode, template or "-", "key=$var" | "key=literal"...).
@@ -1080,8 +1183,8 @@ vc_enter(clixon_handle h,
             cvec_add_string(_ctx, key, val);
         free(val);
     }
-    if (tpl != NULL && tpl_edit(h, cvv, tpl, NS_BGP) < 0)
-        return -1;
+    if (tpl != NULL && (i = tpl_edit(h, cvv, tpl, NS_BGP)) != 0)
+        return i < 0 ? -1 : 0;
     return cli_set_syntax_mode(h, (char *)mode) < 0 ? -1 : 0;
 }
 
@@ -1095,28 +1198,18 @@ vc_expand_names(clixon_handle h,
                 cvec         *commands,
                 cvec         *helptexts)
 {
-    cxobj  *xt = NULL;
-    cxobj **vec = NULL;
-    cvec   *nsc;
-    size_t  len;
-    size_t  i;
+    cvec   *names;
+    cg_var *cv;
     int     a;
-    char   *key;
 
-    if (clicon_rpc_get_config(h, NULL, "candidate", "/", NULL, NULL, &xt) < 0 || xt == NULL)
-        return 0;
-    nsc = xml_nsctx_init("bgp", NS_BGP);
     for (a = 0; a + 1 < cvec_len(argv); a += 3) {
-        if (xpath_vec(xt, nsc, "%s", &vec, &len, arg_str(argv, a)) < 0)
-            continue;
-        for (i = 0; i < len; i++)
-            if ((key = xml_find_body(vec[i], arg_str(argv, a + 1))) != NULL)
-                add_completion(commands, helptexts, key, arg_str(argv, a + 2) ? arg_str(argv, a + 2) : "");
-        free(vec);
-        vec = NULL;
+        names = cvec_new(0);
+        cand_names(h, arg_str(argv, a), arg_str(argv, a + 1), names);
+        cv = NULL;
+        while ((cv = cvec_each(names, cv)) != NULL)
+            add_completion(commands, helptexts, cv_string_get(cv), arg_str(argv, a + 2) ? arg_str(argv, a + 2) : "");
+        cvec_free(names);
     }
-    cvec_free(nsc);
-    xml_free(xt);
     return 0;
 }
 
