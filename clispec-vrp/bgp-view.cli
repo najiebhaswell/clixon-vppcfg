@@ -5,7 +5,7 @@ CLICON_PROMPT="[~%H-bgp]";
 CLICON_PLUGIN="cli_vppcfg";
 
 router-id("Router ID used by BIRD (also the BGP identifier)") <rid:ipv4addr>("X.X.X.X"), vc_edit("<routing><router-id>$rid</router-id></routing>");
-group("Create a peer group") <peer:string regexp:"[A-Za-z][A-Za-z0-9_-]{0,47}">("Group name") [(external("EBGP group (informational)")|internal("IBGP group (informational)"))], vc_edit("<routing><bgp><peer-group><name>$peer</name></peer-group></bgp></routing>");
+group("Create a peer group") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Existing peer group")>("Existing peer group")|<peer:string regexp:"[A-Za-z][A-Za-z0-9_-]{0,47}">("New group name")) [(external("EBGP group (informational)")|internal("IBGP group (informational)"))], vc_edit("<routing><bgp><peer-group><name>$peer</name></peer-group></bgp></routing>");
 peer("Configure a BGP peer or peer group") (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Peer", "/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Peer address or group name")|<peer:string>("Peer address or group name")) {
     as-number("AS number of the peer (equal to the local AS: IBGP)") <asn:uint32 range[1:4294967295]>("AS number"), vc_edit("<routing><bgp><PEER><remote-as>$asn</remote-as></PEER></bgp></routing>");
     group("Add the peer to a peer group") (<group:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:peer-group", "name", "Peer group")>("Group")|<group:string>("Group name")), vc_edit("<routing><bgp><neighbor><address>$peer</address><peer-group>$group</peer-group></neighbor></bgp></routing>");

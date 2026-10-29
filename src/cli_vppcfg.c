@@ -1194,7 +1194,8 @@ vc_enter(clixon_handle h,
 }
 
 /*! Tab completion of BGP object names from the candidate: argv = (xpath, key leaf, help) triples,
- * e.g. ("/bgp:routing/bgp:prefix-list", "name", "Prefix list"). */
+ * e.g. ("/bgp:routing/bgp:prefix-list", "name", "Prefix list"). "$var" in the xpath is replaced by
+ * a value typed earlier on the command line, e.g. the node numbers of route-policy $name. */
 int
 vc_expand_names(clixon_handle h,
                 char         *name,
@@ -1203,13 +1204,43 @@ vc_expand_names(clixon_handle h,
                 cvec         *commands,
                 cvec         *helptexts)
 {
-    cvec   *names;
-    cg_var *cv;
-    int     a;
+    cvec       *names;
+    cg_var     *cv;
+    cbuf       *xp;
+    const char *t;
+    char        var[64];
+    char       *v;
+    size_t      j;
+    int         ok;
+    int         a;
 
     for (a = 0; a + 1 < cvec_len(argv); a += 3) {
+        xp = cbuf_new();
+        ok = 1;
+        for (t = arg_str(argv, a); ok && *t; ) {
+            if (*t != '$') {
+                cprintf(xp, "%c", *t++);
+                continue;
+            }
+            for (j = 0, t++; j < sizeof(var) - 1 && (isalnum((unsigned char)*t) || *t == '_'); )
+                var[j++] = *t++;
+            var[j] = '\0';
+            /* Typed values are checked by their own regexp; refuse quotes anyway */
+            if ((v = tpl_value(cvv, var)) == NULL || strchr(v, '\'') != NULL) {
+                free(v);
+                ok = 0;
+                break;
+            }
+            cprintf(xp, "%s", v);
+            free(v);
+        }
+        if (!ok) {
+            cbuf_free(xp);
+            continue;
+        }
         names = cvec_new(0);
-        cand_names(h, arg_str(argv, a), arg_str(argv, a + 1), names);
+        cand_names(h, cbuf_get(xp), arg_str(argv, a + 1), names);
+        cbuf_free(xp);
         cv = NULL;
         while ((cv = cvec_each(names, cv)) != NULL)
             add_completion(commands, helptexts, cv_string_get(cv), arg_str(argv, a + 2) ? arg_str(argv, a + 2) : "");
