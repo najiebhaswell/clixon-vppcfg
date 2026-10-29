@@ -49,6 +49,12 @@ module vppcfg-bgp {
         }
         description "Standard community ASN:value.";
     }
+    typedef large-community {
+        type string {
+            pattern '[0-9]{1,10}:[0-9]{1,10}:[0-9]{1,10}';
+        }
+        description "Large community (RFC 8092) ASN:data1:data2, each part 0..4294967295.";
+    }
     typedef action {
         type enumeration {
             enum permit;
@@ -176,6 +182,13 @@ module vppcfg-bgp {
                 type community;
             }
         }
+        list large-community-list {
+            key name;
+            leaf name { type object-name; }
+            leaf-list large-community {
+                type large-community;
+            }
+        }
         list route-policy {
             key name;
             leaf name { type object-name; }
@@ -190,6 +203,7 @@ module vppcfg-bgp {
                 container match {
                     leaf prefix-list { type object-name; }
                     leaf community-list { type object-name; }
+                    leaf large-community-list { type object-name; }
                     leaf as-path-contains { type asn; }
                     leaf origin-as { type asn; }
                 }
@@ -197,6 +211,7 @@ module vppcfg-bgp {
                     leaf local-preference { type uint32; }
                     leaf med { type uint32; }
                     leaf-list community { type community; }
+                    leaf-list large-community { type large-community; }
                     leaf prepend-as { type asn; }
                     leaf prepend-count {
                         type uint8 {

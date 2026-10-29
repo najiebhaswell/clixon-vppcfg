@@ -28,7 +28,7 @@ covers both, and a failure in either rolls both back.
 - The interface model (`yang/vppcfg@2026-10-28.yang`) maps 1:1 to the vppcfg 1.2.x schema: physical
   interfaces, sub-interfaces, loopbacks and BondEthernet.
 - The BGP model (`yang/vppcfg-bgp@2026-10-28.yang`) covers router-id, local AS, networks, peers and
-  peer-groups, prefix-lists, community-lists and route-policies (route-maps).
+  peer-groups, prefix-lists, community-lists, large-community-lists (RFC 8092) and route-policies (route-maps).
 - `/etc/vpp/vppcfg.yaml` is **generated** on every commit; do not edit it by hand.
 - At VPP start the configuration is still loaded from `/etc/vpp/config/vppcfg.vpp`, so the dataplane
   comes up even if the Clixon backend is not running.
@@ -144,6 +144,9 @@ with `if-match ip-prefix OWN` and `apply as-path 65000 additive 2`, `bgp 65000` 
 
 - Peers without a route-map accept and announce nothing (RFC 8212). `neighbor X bird-filter <name> in|out`
   (`peer X bird-filter <name> import|export`) uses a filter written by hand in bird.conf instead.
+- Large communities: `ip large-community-list NAME permit 65000:1:100`, `match large-community NAME`,
+  `set large-community 65000:2:200 additive` (`ip large-community-filter basic NAME permit ...`,
+  `if-match large-community-filter NAME`, `apply large-community ... additive` in `vrp`).
 - Neighbor settings override peer-group settings; the merged result is rendered per neighbor
   (`protocol bgp cx_<address>` in BIRD; `neighbor X name TRANSIT_A` / `peer X name TRANSIT_A` gives the
   session its own name in `birdc show protocols`; renaming restarts that session).
@@ -230,7 +233,7 @@ $ vrp
 
 ## Roadmap
 
-- Static routes, RPKI/ROA, large communities and AS-path regular expressions.
+- Static routes, RPKI/ROA and AS-path regular expressions.
 - `show commit history` and `rollback <n>` from `/var/lib/clixon-vppcfg/history`.
 - Remaining vppcfg sections: bridgedomains, vxlan_tunnels, taps, prefixlists, acls, sflow.
 - RESTCONF and NACM (users/roles).
