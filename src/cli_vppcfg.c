@@ -1152,6 +1152,29 @@ vc_edit(clixon_handle h,
     return tpl_edit(h, cvv, arg_str(argv, 0), NS_BGP) < 0 ? -1 : 0;
 }
 
+/* AS-path list entry: argv = (template). Like vc_edit, after the helper has checked the pattern ($re
+ * or $mask), so a regular expression that cannot be translated to a BIRD path mask is refused when it
+ * is typed; the helper shows the translation. */
+int
+vc_aspath(clixon_handle h,
+          cvec         *cvv,
+          cvec         *argv)
+{
+    char *re = tpl_value(cvv, "re");
+    char *mask = tpl_value(cvv, "mask");
+    char *args[] = {HELPER, "aspath-check", re ? "regex" : "mask", re ? re : mask,
+                    "--style", _vrp ? "vrp" : "cisco", NULL};
+    int   st = 0;
+
+    if (re != NULL || mask != NULL)
+        st = run_prog(args, 0);
+    free(re);
+    free(mask);
+    if (st != 0)
+        return 0;
+    return vc_edit(h, cvv, argv);
+}
+
 /* Enter a BGP or route-policy mode: argv = (mode, template or "-", "key=$var" | "key=literal"...).
  * The key/value pairs become the mode context used by later templates ($af, $rp, $rseq).
  * CLIgen drops empty "" arguments, so "-" means "no template"; an argument that does not start

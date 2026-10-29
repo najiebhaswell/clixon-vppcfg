@@ -10,6 +10,7 @@ match("Conditions; all must be true for this sequence to apply") {
     community("Route carries any community of a community list") (<cl:string vc_expand_names("/bgp:routing/bgp:community-list", "name", "Community list")>("Community list")|<cl:string>("Community list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><community-list>$cl</community-list></match></node></route-policy></routing>");
     large-community("Route carries any large community of a large community list") (<lcl:string vc_expand_names("/bgp:routing/bgp:large-community-list", "name", "Large community list")>("Large community list")|<lcl:string>("Large community list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><large-community-list>$lcl</large-community-list></match></node></route-policy></routing>");
     as-path("AS path") {
+        (<apl:string vc_expand_names("/bgp:routing/bgp:as-path-list", "name", "AS-path access list")>("AS-path access list")|<apl:string>("AS-path access list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><as-path-list>$apl</as-path-list></match></node></route-policy></routing>");
         contains("AS path contains this AS") <asn:uint32 range[1:4294967295]>("AS number"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><as-path-contains>$asn</as-path-contains></match></node></route-policy></routing>");
         origin("Route originated by this AS (last AS in the path)") <asn:uint32 range[1:4294967295]>("AS number"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><origin-as>$asn</origin-as></match></node></route-policy></routing>");
     }
@@ -29,7 +30,7 @@ no("Negate a command") {
         ipv6("IPv6") address("Destination prefix") prefix-list("Remove the prefix list condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list nc:operation='remove'/></match></node></route-policy></routing>");
         large-community("Remove the large community condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><large-community-list nc:operation='remove'/></match></node></route-policy></routing>");
         community("Remove the community condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><community-list nc:operation='remove'/></match></node></route-policy></routing>");
-        as-path("AS path") {
+        as-path("Remove the AS-path access list condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><as-path-list nc:operation='remove'/></match></node></route-policy></routing>"); {
             contains("Remove the AS-path condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><as-path-contains nc:operation='remove'/></match></node></route-policy></routing>");
             origin("Remove the origin-AS condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><origin-as nc:operation='remove'/></match></node></route-policy></routing>");
         }

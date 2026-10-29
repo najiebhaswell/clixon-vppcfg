@@ -19,6 +19,9 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
   clixon-vppcfg diff <a.xml> <b.xml> [--style cisco|vrp]
                                          unified diff of the rendered configuration from a to b
   clixon-vppcfg changed <a.xml> <b.xml>  exit 1 if a and b differ, 0 if identical
+  clixon-vppcfg aspath-check regex|mask <pattern> [--style cisco|vrp]
+                                         check an AS-path pattern (CLI): show the BIRD path mask of a
+                                         regular expression, or the error and exit 1
   clixon-vppcfg vppctl [--style cisco|vrp] <command...>
                                          run vppctl; with vrp, show Eth-TrunkN/LoopBackN names
   clixon-vppcfg ip-brief [--style cisco|vrp]
@@ -344,8 +347,8 @@ def cmd_apply(xml_path):
 # ---------------------------------------------------------------------------
 
 BGP_LISTS = {"network": "prefix", "peer-group": "name", "neighbor": "address", "prefix-list": "name",
-             "entry": "seq", "community-list": "name", "large-community-list": "name", "route-policy": "name",
-             "node": "seq"}
+             "entry": "seq", "community-list": "name", "large-community-list": "name", "as-path-list": "name",
+             "route-policy": "name", "node": "seq"}
 BGP_LEAFLISTS = {"community", "large-community"}
 BGP_INTS = {"local-as", "remote-as", "multihop", "hold-time", "keepalive", "max-prefix", "seq", "ge", "le",
             "as-path-contains", "origin-as", "local-preference", "med", "prepend-as", "prepend-count"}
@@ -360,7 +363,7 @@ def bgp_elem(el):
     d = {}
     for c in el:
         n = local(c.tag)
-        # peer-group, prefix-list and (large-)community-list are lists at the top level but also leaves
+        # peer-group, prefix-list, (large-)community-list and as-path-list are lists at the top level but also leaves
         # (references) inside neighbor and match: an element without children is always a leaf.
         if n in BGP_LISTS and len(c):
             item = bgp_elem(c)
@@ -413,6 +416,15 @@ def bgp_errors(r):
     bgp = r.get("bgp", {})
     pls, cls, rps = r.get("prefix-list", {}), r.get("community-list", {}), r.get("route-policy", {})
     lcls = r.get("large-community-list", {})
+    apls = r.get("as-path-list", {})
+    for name, al in apls.items():
+        for seq, e in al.get("entry", {}).items():
+            if "action" not in e:
+                errs.append(f"as-path-list {name} seq {seq}: permit/deny is required")
+            try:
+                aspath_entry_mask(e)
+            except ValueError as ex:
+                errs.append(f"as-path-list {name} seq {seq}: {ex}")
     for name, cl in lcls.items():
         for c in cl.get("large-community", []):
             if not lc_ok(c):
@@ -452,6 +464,8 @@ def bgp_errors(r):
                 errs.append(f"{where}: prefix-list {m['prefix-list']} does not exist")
             if "community-list" in m and m["community-list"] not in cls:
                 errs.append(f"{where}: community-list {m['community-list']} does not exist")
+            if "as-path-list" in m and m["as-path-list"] not in apls:
+                errs.append(f"{where}: as-path-list {m['as-path-list']} does not exist")
             if "large-community-list" in m and m["large-community-list"] not in lcls:
                 errs.append(f"{where}: large-community-list {m['large-community-list']} does not exist")
             for c in node.get("set", {}).get("large-community", []):
@@ -461,7 +475,8 @@ def bgp_errors(r):
             if ("prepend-count" in st or "prepend-as" in st) and "prepend-as" not in st and "local-as" not in bgp:
                 errs.append(f"{where}: AS-path prepend needs an AS number or the local AS")
 
-    for kind, objs, prefix in (("prefix-list", pls, "cx_pl_"), ("route-policy", rps, "cx_rp_")):
+    for kind, objs, prefix in (("prefix-list", pls, "cx_pl_"), ("as-path-list", apls, "cx_ap_"),
+                               ("route-policy", rps, "cx_rp_")):
         seen = {}
         for name in objs:
             ident = bird_ident(prefix, name)
@@ -513,6 +528,69 @@ def bird_proto(addr, n=None):
     return (n or {}).get("name") or bird_ident("cx_", addr)
 
 
+ASPATH_TOKEN = re.compile(r"_|\.\*|\[0-9\]\+|\d+|\(\d+(?:\|\d+)*\)")
+BIRD_MASK = re.compile(r"\[=[0-9 *?\[\],.]*=\]")
+
+
+def aspath_mask(regex):
+    """Translate a Cisco/Huawei AS-path regular expression to a BIRD path mask (ValueError if not possible).
+    Supported: ^ and $ anchors, _ (AS boundary), AS numbers, (A|B|C) alternatives, [0-9]+ (any one AS)
+    and .* (any number of ASes)."""
+    s = regex
+    start, end = s.startswith("^"), s.endswith("$")
+    s = s[1 if start else 0:len(s) - (1 if end else 0)]
+    toks, i = [], 0
+    while i < len(s):
+        m = ASPATH_TOKEN.match(s, i)
+        if not m:
+            raise ValueError(f"'{s[i:]}' cannot be translated to a BIRD path mask "
+                             "(supported: ^ $ _ .* [0-9]+ AS numbers and (A|B) alternatives); use bird-mask")
+        toks.append(m.group())
+        i = m.end()
+    items = []
+    for k, t in enumerate(toks):
+        if t == "_":
+            continue
+        if t == ".*":
+            items.append("*")
+            continue
+        left = toks[k - 1] == "_" if k else start
+        right = toks[k + 1] == "_" if k + 1 < len(toks) else end
+        if not (left and right):
+            raise ValueError(f"'{t}' must have _ (or ^ / $) on both sides; otherwise it would also match "
+                             "part of a longer AS number")
+        if t == "[0-9]+":
+            items.append("?")
+            continue
+        asns = [int(a) for a in t.strip("()").split("|")]
+        if any(a > 0xFFFFFFFF for a in asns):
+            raise ValueError(f"AS number in '{t}' is larger than 4294967295")
+        items.append(str(asns[0]) if len(asns) == 1 else "[" + ", ".join(map(str, asns)) + "]")
+    if not start and items[:1] != ["*"]:
+        items.insert(0, "*")
+    if not end and items[-1:] != ["*"]:
+        items.append("*")
+    items = [x for k, x in enumerate(items) if not (x == "*" and k and items[k - 1] == "*")]
+    return "[= " + " ".join(items) + " =]" if items else "[= =]"
+
+
+def cli_regex(rx):
+    """A regular expression as typed in the CLI: quoted when it contains | (else taken as a pipe)."""
+    return f'"{rx}"' if "|" in rx else rx
+
+
+def aspath_entry_mask(e):
+    """BIRD path mask of an as-path-list entry (ValueError if invalid)."""
+    if "regex" in e:
+        return aspath_mask(e["regex"])
+    if "bird-mask" in e:
+        if not BIRD_MASK.fullmatch(e["bird-mask"]):
+            raise ValueError(f"bird-mask {e['bird-mask']}: expected [= ... =] with AS numbers, ranges A..B, "
+                             "sets [A, B], ? and *")
+        return e["bird-mask"]
+    raise ValueError("a regular expression or a bird-mask is required")
+
+
 def bird_pattern(prefix, ge=None, le=None):
     net = ipaddress.ip_network(prefix, strict=False)
     base = f"{net.network_address}/{net.prefixlen}"
@@ -551,6 +629,14 @@ def render_bird(r):
             out.append(f"  if net.type = {fam} then {{ if net ~ [ {bird_pattern(e['prefix'], e.get('ge'), e.get('le'))} ]"
                        f" then return {ret}; }}  # seq {seq}")
         out += ["  return false;", "}", ""]
+    for name, al in r.get("as-path-list", {}).items():
+        out.append(f"function {bird_ident('cx_ap_', name)}() -> bool {{")
+        for seq in sorted(al.get("entry", {})):
+            e = al["entry"][seq]
+            src = f"regex {e['regex']}" if "regex" in e else "bird-mask"
+            out.append(f"  if bgp_path ~ {aspath_entry_mask(e)} then return {'true' if e['action'] == 'permit' else 'false'};"
+                       f"  # seq {seq} {src}")
+        out += ["  return false;", "}", ""]
     for name, rp in r.get("route-policy", {}).items():
         out.append(f"filter {bird_ident('cx_rp_', name)} {{")
         for seq in sorted(rp.get("node", {})):
@@ -566,6 +652,8 @@ def render_bird(r):
                 lcs = r.get("large-community-list", {}).get(m["large-community-list"], {}).get("large-community", [])
                 conds.append(f"bgp_large_community ~ [ {', '.join(bird_large_community(c) for c in lcs)} ]"
                              if lcs else "false")
+            if "as-path-list" in m:
+                conds.append(f"{bird_ident('cx_ap_', m['as-path-list'])}()")
             if "as-path-contains" in m:
                 conds.append(f"bgp_path ~ [= * {m['as-path-contains']} * =]")
             if "origin-as" in m:
@@ -981,6 +1069,12 @@ def cisco_bgp_lines(r):
         for c in cl.get("large-community", []):
             out.append(f"ip large-community-list {name} permit {c}")
         out.append("!")
+    for name, al in r.get("as-path-list", {}).items():
+        for seq in sorted(al.get("entry", {})):
+            e = al["entry"][seq]
+            pat = cli_regex(e["regex"]) if "regex" in e else f"bird-mask {e.get('bird-mask', '?')}"
+            out.append(f"ip as-path access-list {name} seq {seq} {e.get('action', '?')} {pat}")
+        out.append("!")
     for name, rp in r.get("route-policy", {}).items():
         for seq in sorted(rp.get("node", {})):
             node = rp["node"][seq]
@@ -992,6 +1086,8 @@ def cisco_bgp_lines(r):
                 out.append(f" match community {m['community-list']}")
             if "large-community-list" in m:
                 out.append(f" match large-community {m['large-community-list']}")
+            if "as-path-list" in m:
+                out.append(f" match as-path {m['as-path-list']}")
             if "as-path-contains" in m:
                 out.append(f" match as-path contains {m['as-path-contains']}")
             if "origin-as" in m:
@@ -1093,6 +1189,12 @@ def vrp_bgp_lines(r, section=None):
         for name, cl in r.get("large-community-list", {}).items():
             out.append("#")
             out += [f"ip large-community-filter basic {name} permit {c}" for c in cl.get("large-community", [])]
+        for name, al in r.get("as-path-list", {}).items():
+            out.append("#")
+            for seq in sorted(al.get("entry", {})):
+                e = al["entry"][seq]
+                pat = cli_regex(e["regex"]) if "regex" in e else f"bird-mask {e.get('bird-mask', '?')}"
+                out.append(f"ip as-path-filter {name} index {seq} {e.get('action', '?')} {pat}")
     for name, rp in r.get("route-policy", {}).items():
         if section not in (None, f"route-policy:{name}"):
             continue
@@ -1106,6 +1208,8 @@ def vrp_bgp_lines(r, section=None):
                 out.append(f" if-match community-filter {m['community-list']}")
             if "large-community-list" in m:
                 out.append(f" if-match large-community-filter {m['large-community-list']}")
+            if "as-path-list" in m:
+                out.append(f" if-match as-path-filter {m['as-path-list']}")
             if "as-path-contains" in m:
                 out.append(f" if-match as-path contains {m['as-path-contains']}")
             if "origin-as" in m:
@@ -1241,6 +1345,13 @@ def main():
         if unsupported:
             die("vppcfg.yaml sections not yet supported by the phase 1 YANG model: " + ", ".join(sorted(unsupported)))
         sys.stdout.write(cfg_to_xml(cfg))
+    elif verb == "aspath-check" and len(args) == 2 and args[0] in ("regex", "mask"):
+        try:
+            mask = aspath_entry_mask({"regex" if args[0] == "regex" else "bird-mask": args[1]})
+            if args[0] == "regex":
+                print(("Info: t" if style == "vrp" else "T") + f"ranslated to the BIRD path mask {mask}")
+        except ValueError as ex:
+            die(("Error: " if style == "vrp" else "% ") + str(ex))
     elif verb == "render-bird" and len(args) == 1:
         sys.stdout.write(render_bird(xml_to_bgp(args[0])))
     elif verb == "bgp-neighbor" and len(args) == 1:

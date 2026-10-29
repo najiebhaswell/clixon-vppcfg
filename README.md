@@ -28,7 +28,7 @@ covers both, and a failure in either rolls both back.
 - The interface model (`yang/vppcfg@2026-10-28.yang`) maps 1:1 to the vppcfg 1.2.x schema: physical
   interfaces, sub-interfaces, loopbacks and BondEthernet.
 - The BGP model (`yang/vppcfg-bgp@2026-10-28.yang`) covers router-id, local AS, networks, peers and
-  peer-groups, prefix-lists, community-lists, large-community-lists (RFC 8092) and route-policies (route-maps).
+  peer-groups, prefix-lists, community-lists, large-community-lists (RFC 8092), AS-path lists and route-policies (route-maps).
 - `/etc/vpp/vppcfg.yaml` is **generated** on every commit; do not edit it by hand.
 - At VPP start the configuration is still loaded from `/etc/vpp/config/vppcfg.vpp`, so the dataplane
   comes up even if the Clixon backend is not running.
@@ -147,6 +147,13 @@ with `if-match ip-prefix OWN` and `apply as-path 65000 additive 2`, `bgp 65000` 
 - Large communities: `ip large-community-list NAME permit 65000:1:100`, `match large-community NAME`,
   `set large-community 65000:2:200 additive` (`ip large-community-filter basic NAME permit ...`,
   `if-match large-community-filter NAME`, `apply large-community ... additive` in `vrp`).
+- AS-path lists: `ip as-path access-list NAME seq 10 permit _64500$` and `match as-path NAME`
+  (`ip as-path-filter NAME index 10 permit _64500$`, `if-match as-path-filter NAME`). BIRD has no
+  regular expressions, so each expression is translated to a BIRD path mask when it is typed (the CLI
+  shows the result) and refused if that is not possible. Supported: `^`, `$`, `_`, AS numbers,
+  `(A|B|C)` (one of several ASes; type the expression in double quotes because of `|`), `[0-9]+` (any
+  one AS) and `.*` (any number of ASes, including none). Anything else can be written as a BIRD mask:
+  `... permit bird-mask [= * 64512..65534 * =]`.
 - Neighbor settings override peer-group settings; the merged result is rendered per neighbor
   (`protocol bgp cx_<address>` in BIRD; `neighbor X name TRANSIT_A` / `peer X name TRANSIT_A` gives the
   session its own name in `birdc show protocols`; renaming restarts that session).
@@ -233,7 +240,7 @@ $ vrp
 
 ## Roadmap
 
-- Static routes, RPKI/ROA and AS-path regular expressions.
+- Static routes and RPKI/ROA.
 - `show commit history` and `rollback <n>` from `/var/lib/clixon-vppcfg/history`.
 - Remaining vppcfg sections: bridgedomains, vxlan_tunnels, taps, prefixlists, acls, sflow.
 - RESTCONF and NACM (users/roles).

@@ -182,6 +182,39 @@ module vppcfg-bgp {
                 type community;
             }
         }
+        list as-path-list {
+            key name;
+            leaf name { type object-name; }
+            description "AS-path list: entries are tried in seq order, the first match decides
+                         (permit or deny); no match is deny.";
+            list entry {
+                key seq;
+                leaf seq {
+                    type uint32 {
+                        range "1..4294967295";
+                    }
+                }
+                leaf action { type action; }
+                choice pattern {
+                    leaf regex {
+                        type string {
+                            length "1..200";
+                            pattern '[^" ;]+';
+                        }
+                        description "Cisco/Huawei AS-path regular expression, translated to a BIRD path
+                                     mask (checked by the helper). Supported: ^ $ _ .* [0-9]+ AS numbers
+                                     and (A|B|C).";
+                    }
+                    leaf bird-mask {
+                        type string {
+                            length "5..200";
+                            pattern '[^";]+';
+                        }
+                        description "BIRD path mask used as is, e.g. [= * 64512..65534 * =].";
+                    }
+                }
+            }
+        }
         list large-community-list {
             key name;
             leaf name { type object-name; }
@@ -204,6 +237,7 @@ module vppcfg-bgp {
                     leaf prefix-list { type object-name; }
                     leaf community-list { type object-name; }
                     leaf large-community-list { type object-name; }
+                    leaf as-path-list { type object-name; }
                     leaf as-path-contains { type asn; }
                     leaf origin-as { type asn; }
                 }
