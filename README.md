@@ -204,6 +204,107 @@ with `if-match ip-prefix OWN` and `apply as-path 65000 65000 additive`, `bgp 650
   counters, so MsgRcvd/MsgSent/OutQ are not shown).
 - `show bgp summary`, `show bgp neighbor <address>`, `show ip bgp <prefix>`
   (`display bgp peer [<address> verbose]`, `display bgp routing-table <prefix>`).
+- `show ip prefix-list [name]`, `show ipv6 prefix-list [name]`, `show ip as-path-access-list [name]`,
+  `show ip community-list [name]`, `show ip large-community-list [name]`
+  (`display ip ip-prefix [name]`, `display ip ipv6-prefix [name]`, `display ip as-path-filter [name]`,
+  `display ip community-filter [name]`, `display ip large-community-filter [name]`):
+  the committed lists with their entries.
+
+`peer <address> allow-as-loop [n]` (`neighbor <address> allowas-in [n]`), in the address family view,
+accepts routes with up to `n` local AS numbers in the AS path; without a number 1. BIRD has this per
+session, so it applies to all families of the peer, and changing it restarts the session. It can cause
+routing loops, so keep `n` as low as possible.
+
+`peer <address|group> reflect-client` (`neighbor <address|group> route-reflector-client`), in the address
+family view, makes this router a route reflector for that IBGP peer: routes of the client also go to
+other IBGP peers, and IBGP routes go to the client. It is set per session, applies to all families of the
+peer, and changing it restarts the session. An EBGP peer is refused at commit.
+
+`apply preference <n>` (`set preference <n>`) sets the route preference in BIRD, which selects between
+protocols before any BGP attribute: for example a BGP route that must win over a static route for the
+same prefix. **Higher is preferred, the opposite of VRP and IOS.** Defaults: BGP 100, static 200, direct 240.
+
+### Static routes
+
+Static routes are rendered to the BIRD protocols `cx_static4` and `cx_static6`, so they go through
+candidate, commit and rollback like the rest of the configuration.
+
+```
+BR(config)# ip route 0.0.0.0/0 192.0.2.1
+BR(config)# ip route 198.51.100.0/24 Null0
+BR(config)# ip route 203.0.113.0/24 192.0.2.6 as-path 64500 64500
+BR(config)# ipv6 route ::/0 2001:db8::1
+```
+
+```
+[~BR] ip route-static 0.0.0.0 0 192.0.2.1
+[~BR] ip route-static 198.51.100.0 24 NULL0
+[~BR] ip route-static 203.0.113.0 24 192.0.2.6 as-path 64500 64500
+[~BR] ipv6 route-static :: 0 2001:db8::1
+```
+
+- `as-path` (an extension, no IOS or VRP equivalent) puts AS numbers in the AS path of the route, leftmost
+  first; on EBGP sessions BIRD adds the local AS in front of them. Export filters see it like any AS path.
+- A prefix has one destination: a second one, or a `network` for the same prefix, is refused at commit.
+  Entering the same destination again replaces it, including its `as-path`.
+- A next hop that is not on a connected network does not fail the commit: BIRD just does not use the
+  route. Check `show ip route static` (`display ip routing-table protocol static`): `Active`, `Standby`
+  (another protocol wins, see `apply preference`) or `Inactive` (next hop not reachable).
+- The hand-written BIRD configuration decides whether static routes reach the kernel and so VPP: the
+  export filter of `protocol kernel` must allow `RTS_STATIC`.
+- An IPv6 link-local next hop is not supported.
+
+### RPKI
+
+Origin validation with [RPKI-to-Router](https://www.rfc-editor.org/rfc/rfc8210) cache servers, done by
+BIRD (`protocol rpki` and `roa_check()`). Each server gets its own session and all of them feed the
+same ROA tables, so a second server keeps the data current when the first one fails.
+
+```
+BR(config)# router bgp 65000
+BR(config-router)# bgp rpki server tcp 172.65.0.2 port 8282 refresh 900 retry 90 aging 172800
+BR(config-router)# exit
+BR(config)# route-map CUST-IN deny 5
+BR(config-route-map)# match rpki invalid
+```
+
+```
+[~BR] rpki
+[~BR-rpki] session 172.65.0.2
+[~BR-rpki-session] tcp port 8282
+[~BR-rpki-session] timer refresh 900
+[~BR-rpki-session] timer retry 90
+[~BR-rpki-session] timer aging 172800
+[~BR-rpki-session] quit
+[~BR-rpki] quit
+[~BR] route-policy CUST-IN deny node 5
+[~BR-route-policy] if-match rpki origin-as-validation invalid
+```
+
+- The condition takes `invalid`, `not-found` or `valid`, and works for IPv4 and IPv6. It rejects nothing
+  by itself: a route-policy decides what happens, usually `deny` for `invalid` and nothing for
+  `not-found`. Routes without an origin AS (own `network` prefixes, an empty AS path) are `not-found`.
+- **The first RPKI condition on a peer restarts its BGP session.** BIRD revalidates routes after a ROA
+  change only from the import or export table, so these are enabled on channels whose policy has an
+  RPKI condition. Enabling a table on a running channel restarts the session. After that, ROA changes
+  re-evaluate the affected routes without a restart. The table keeps all routes of that peer in memory.
+- **The ROA tables use memory:** about 500 MB for the about 1 million ROAs of 2026.
+- **BIRD must reach the server from the network namespace it runs in.** With the dataplane namespace,
+  that means through a VPP interface, not the management port.
+- While a server is unreachable its ROAs stay until `aging` expires. Without any ROA every route is
+  `not-found`, so nothing is rejected: check `display rpki session`.
+- A condition without a session, `aging` not larger than `refresh`, and a source address of the other
+  family are refused at commit. Without `port` the session uses 323. Configured timers are not replaced
+  by values sent by the server (`keep` in BIRD).
+
+| `rtr` | `vrp` | |
+|---|---|---|
+| `show ip bgp rpki servers [address]` | `display rpki session [address verbose]` | State, serial and ROAs, or all details |
+| `show ip bgp rpki table statistics` | `display rpki table statistics` | Number of ROAs |
+| `show ip bgp rpki table <prefix>` | `display rpki table <prefix>` | ROAs covering a prefix |
+| `show ip bgp rpki validation <prefix> <as>` | `display rpki validation <prefix> <as>` | `Valid`, `Invalid` or `NotFound` |
+
+Only unprotected TCP is supported, so use a server on a network you trust.
 
 ### Network tools
 
@@ -263,6 +364,8 @@ $ vrp
   src-dst-ip-port`, `trunkport <port>`, or `eth-trunk <n>` in the member port's view.
 - `display current-configuration`, `display configuration candidate [changes]`, `display this`,
   `display interface [name]`, `display ip interface brief`, `display ip routing-table statistics|<prefix>`,
+  `display ip ip-prefix|ipv6-prefix|as-path-filter|community-filter|large-community-filter [name]`,
+  `display rpki session|table|validation`, `display ip routing-table protocol static`,
   `display ipv6 routing-table ...`, `display eth-trunk`, `display bgp peer [<name> verbose]`, `display version`.
   `display ip routing-table` without arguments is not offered, because a full table would print a
   million lines.
@@ -296,7 +399,6 @@ $ vrp
 
 ## Roadmap
 
-- Static routes and RPKI/ROA.
 - `show commit history` and `rollback <n>` from `/var/lib/clixon-vppcfg/history`.
 - Remaining vppcfg sections: bridgedomains, vxlan_tunnels, taps, prefixlists, acls, sflow.
 - RESTCONF and NACM (users/roles).

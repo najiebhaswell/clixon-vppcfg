@@ -19,6 +19,10 @@ peer("Per-family peer settings") (<peer:string vc_expand_names("/bgp:routing/bgp
         export("Routes announced to the peer"), vc_edit("<routing><bgp><PEER><$af><export-filter>$bf</export-filter></$af></PEER></bgp></routing>");
     }
     route-limit("Restart the session when the peer sends more routes") <max:uint32 range[1:4294967295]>("Maximum number of routes"), vc_edit("<routing><bgp><PEER><$af><max-prefix>$max</max-prefix></$af></PEER></bgp></routing>");
+    allow-as-loop("Accept routes with the local AS in the AS path; set for the whole session, changing it restarts the session. Default without a number: 1"), vc_edit("<routing><bgp><PEER><allow-local-as>1</allow-local-as></PEER></bgp></routing>"); {
+        <n:uint8 range[1:10]>("Maximum number of local AS numbers in the AS path"), vc_edit("<routing><bgp><PEER><allow-local-as>$n</allow-local-as></PEER></bgp></routing>");
+    }
+    reflect-client("This router is a route reflector and the IBGP peer its client; set for the whole session, changing it restarts the session"), vc_edit("<routing><bgp><PEER><reflect-client>true</reflect-client></PEER></bgp></routing>");
     next-hop-local("Announce routes with this router as next hop"), vc_edit("<routing><bgp><PEER><$af><next-hop-self>true</next-hop-self></$af></PEER></bgp></routing>");
 }
 undo("Undo a command") {
@@ -37,6 +41,8 @@ undo("Undo a command") {
             export("Outbound"), vc_edit("<routing><bgp><PEER><$af><export-filter nc:operation='remove'/></$af></PEER></bgp></routing>");
         }
         route-limit("Remove the route limit"), vc_edit("<routing><bgp><PEER><$af><max-prefix nc:operation='remove'/></$af></PEER></bgp></routing>");
+        allow-as-loop("Reject routes with the local AS in the AS path"), vc_edit("<routing><bgp><PEER><allow-local-as nc:operation='remove'/></PEER></bgp></routing>");
+        reflect-client("Stop reflecting routes for this peer"), vc_edit("<routing><bgp><PEER><reflect-client nc:operation='remove'/></PEER></bgp></routing>");
         next-hop-local("Keep the original next hop"), vc_edit("<routing><bgp><PEER><$af><next-hop-self nc:operation='remove'/></$af></PEER></bgp></routing>");
     }
 }

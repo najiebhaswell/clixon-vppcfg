@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Huawei VRP style: display commands, available in all views.
-CLICON_MODE="user:system:vrp-if:vrp-subif:vrp-loop:vrp-trunk:vrp-bgp:vrp-bgp-af:vrp-rpolicy";
+CLICON_MODE="user:system:vrp-if:vrp-subif:vrp-loop:vrp-trunk:vrp-bgp:vrp-bgp-af:vrp-rpolicy:vrp-rpki:vrp-rpki-session";
 CLICON_PLUGIN="cli_vppcfg";
 
 display("Display information") {
@@ -12,12 +12,19 @@ display("Display information") {
     interface("Interface state, MTU and counters (all interfaces, or one)") brief("Summary of all interfaces: state and IP addresses"), vc_ip_brief("vrp");
     ip("IPv4 information") {
         interface("Interface information") brief("Interfaces with IP addresses and state"), vc_ip_brief("vrp");
+        ip-prefix("IPv4 prefix lists and their entries") [(<name:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "IP prefix list")>("IP prefix list")|<name:string>("IP prefix list name"))], vc_show_list("ip", "vrp");
+        ipv6-prefix("IPv6 prefix lists and their entries") [(<name:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "IP prefix list")>("IP prefix list")|<name:string>("IP prefix list name"))], vc_show_list("ipv6", "vrp");
+        as-path-filter("AS-path filters and their entries") [(<name:string vc_expand_names("/bgp:routing/bgp:as-path-list", "name", "AS-path filter")>("AS-path filter")|<name:string>("AS-path filter name"))], vc_show_list("as-path", "vrp");
+        community-filter("Community filters and their communities") [(<name:string vc_expand_names("/bgp:routing/bgp:community-list", "name", "Community filter")>("Community filter")|<name:string>("Community filter name"))], vc_show_list("community", "vrp");
+        large-community-filter("Large community filters and their large communities") [(<name:string vc_expand_names("/bgp:routing/bgp:large-community-list", "name", "Large community filter")>("Large community filter")|<name:string>("Large community filter name"))], vc_show_list("large-community", "vrp");
         routing-table("IPv4 forwarding table (VPP FIB)") {
+            protocol("Routes of one protocol") static("Configured static routes and whether BIRD uses them"), vc_show_list("static4", "vrp");
             statistics("Number of IPv4 prefixes per prefix length"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip", "fib", "summary");
             <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip", "fib", "$prefix");
         }
     }
     ipv6("IPv6 information") routing-table("IPv6 forwarding table (VPP FIB)") {
+        protocol("Routes of one protocol") static("Configured static routes and whether BIRD uses them"), vc_show_list("static6", "vrp");
         statistics("Number of IPv6 prefixes per prefix length"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip6", "fib", "summary");
         <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "ip6", "fib", "$prefix");
     }
@@ -29,6 +36,16 @@ display("Display information") {
             (<peer:string vc_expand_names("/bgp:routing/bgp:bgp/bgp:neighbor", "address", "Peer")>("Peer address")|<peer:string>("Peer address or BIRD protocol name")) verbose("Full details of one session"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "bgp-neighbor", "$peer");
         }
         routing-table("BGP routes in BIRD") <prefix:string>("Address or prefix: best and alternative routes with attributes"), vc_run("/usr/sbin/birdc", "show", "route", "for", "$prefix", "all");
+    }
+    rpki("RPKI origin validation (BIRD)") {
+        session("Cache servers: state, serial and number of ROAs"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-session", "--style", "vrp"); {
+            (<addr:string vc_expand_names("/bgp:routing/bgp:rpki/bgp:session", "address", "Session")>("Session")|<addr:string>("Server address")) verbose("Full details of one session"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-session", "--style", "vrp", "$addr");
+        }
+        table("ROA data") {
+            statistics("Number of IPv4 and IPv6 ROAs"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-table", "--style", "vrp", "statistics");
+            <prefix:string>("Address or prefix: the ROAs covering it"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-table", "--style", "vrp", "$prefix");
+        }
+        validation("Origin validation result of a prefix and origin AS") <prefix:string>("Prefix") <asn:uint32 range[0:4294967295]>("Origin AS"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-validate", "--style", "vrp", "$prefix", "$asn");
     }
     version("VPP version and build"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "vppctl", "--style", "vrp", "show", "version");
 }

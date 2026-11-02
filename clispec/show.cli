@@ -11,15 +11,34 @@ show("Show operational state and configuration") {
     hardware("NIC details: link speed, queues, driver and error counters") [<ifname:string vc_expand_ifs()>("Interface name")], vc_run("/usr/bin/vppctl", "show", "hardware-interfaces", "$ifname");
     ip("IPv4 information") {
         interface("Interface information") brief("Interfaces with admin state and IPv4/IPv6 addresses"), vc_ip_brief();
+        prefix-list("IPv4 prefix lists and their entries") [(<name:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "Prefix list")>("Prefix list")|<name:string>("Prefix list name"))], vc_show_list("ip");
+        as-path-access-list("AS-path access lists and their entries") [(<name:string vc_expand_names("/bgp:routing/bgp:as-path-list", "name", "AS-path access list")>("AS-path access list")|<name:string>("AS-path access list name"))], vc_show_list("as-path");
+        community-list("Community lists and their communities") [(<name:string vc_expand_names("/bgp:routing/bgp:community-list", "name", "Community list")>("Community list")|<name:string>("Community list name"))], vc_show_list("community");
+        large-community-list("Large community lists and their large communities") [(<name:string vc_expand_names("/bgp:routing/bgp:large-community-list", "name", "Large community list")>("Large community list")|<name:string>("Large community list name"))], vc_show_list("large-community");
         bgp("BGP routes in BIRD") <prefix:string>("Address or prefix: best and alternative routes with attributes"), vc_run("/usr/sbin/birdc", "show", "route", "for", "$prefix", "all");
+        bgp("BGP routes in BIRD") rpki("RPKI origin validation") {
+            servers("Cache servers: state, serial and number of ROAs"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-session"); {
+                (<addr:string vc_expand_names("/bgp:routing/bgp:rpki/bgp:session", "address", "Server")>("Server")|<addr:string>("Server address")), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-session", "$addr");
+            }
+            table("ROA data") {
+                statistics("Number of IPv4 and IPv6 ROAs"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-table", "statistics");
+                <prefix:string>("Address or prefix: the ROAs covering it"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-table", "$prefix");
+            }
+            validation("Origin validation result of a prefix and origin AS") <prefix:string>("Prefix") <asn:uint32 range[0:4294967295]>("Origin AS"), vc_run("/usr/local/libexec/clixon-vppcfg/clixon-vppcfg", "rpki-validate", "$prefix", "$asn");
+        }
         route("IPv4 forwarding table (VPP FIB)") {
+            static("Configured static routes and whether BIRD uses them"), vc_show_list("static4");
             summary("Number of IPv4 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "summary");
             <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip", "fib", "$prefix");
         }
     }
-    ipv6("IPv6 information") route("IPv6 forwarding table (VPP FIB)") {
-        summary("Number of IPv6 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "summary");
-        <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "$prefix");
+    ipv6("IPv6 information") {
+        prefix-list("IPv6 prefix lists and their entries") [(<name:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "Prefix list")>("Prefix list")|<name:string>("Prefix list name"))], vc_show_list("ipv6");
+        route("IPv6 forwarding table (VPP FIB)") {
+            static("Configured static routes and whether BIRD uses them"), vc_show_list("static6");
+            summary("Number of IPv6 prefixes per prefix length"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "summary");
+            <prefix:string>("Address or prefix: show the FIB entry used to forward it"), vc_run("/usr/bin/vppctl", "show", "ip6", "fib", "$prefix");
+        }
     }
     lcp("linux-cp pairs: VPP interface and its Linux TAP in the dataplane netns"), vc_run("/usr/bin/vppctl", "show", "lcp");
     bond("Bond members and LACP state"), vc_run("/usr/bin/vppctl", "show", "bond", "details");

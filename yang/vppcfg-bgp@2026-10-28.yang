@@ -114,6 +114,16 @@ module vppcfg-bgp {
             }
         }
         leaf shutdown { type boolean; }
+        leaf reflect-client {
+            type boolean;
+            description "This router is a route reflector and the IBGP peer its client.
+                         Set for the session in BIRD, in all address families.";
+        }
+        leaf allow-local-as {
+            type uint8 { range "1..10"; }
+            description "Accept received routes with up to this many local AS numbers in the AS path.
+                         Set for the session in BIRD, in all address families.";
+        }
         container ipv4 { uses af-settings; }
         container ipv6 { uses af-settings; }
     }
@@ -149,6 +159,54 @@ module vppcfg-bgp {
                                  Default: cx_ followed by the address. Renaming restarts the session.";
                 }
                 uses peer-settings;
+            }
+        }
+        list static-route {
+            key "prefix destination";
+            description "Static routes, in BIRD protocols cx_static4 and cx_static6. A prefix can have one
+                         destination: the key allows a commit to refuse a second one instead of replacing it.";
+            leaf prefix { type ip-prefix; }
+            leaf destination {
+                type union {
+                    type ip-address;
+                    type enumeration { enum blackhole; }
+                }
+                description "Next hop, or blackhole to discard the traffic.";
+            }
+            leaf prepend {
+                type string {
+                    pattern '[0-9]{1,10}( [0-9]{1,10}){0,9}';
+                }
+                description "AS numbers put in the AS path of the route, leftmost first.";
+            }
+        }
+        container rpki {
+            description "RPKI origin validation: cache servers reached with the RPKI-to-Router
+                         protocol. All servers feed the same ROA tables.";
+            list session {
+                key address;
+                leaf address { type ip-address; }
+                leaf port {
+                    type uint16 { range "1..65535"; }
+                    description "TCP port of the cache server. Default: 323.";
+                }
+                leaf source-address { type ip-address; description "Source address of the session."; }
+                leaf refresh {
+                    type uint32 { range "1..86399"; }
+                    units seconds;
+                    description "Polling interval. Default: 3600, or the value sent by the server.";
+                }
+                leaf retry {
+                    type uint32 { range "1..7200"; }
+                    units seconds;
+                    description "Wait after a failed poll. Default: 600, or the value sent by the server.";
+                }
+                leaf aging {
+                    type uint32 { range "600..172800"; }
+                    units seconds;
+                    description "ROAs are deleted when they could not be refreshed for this time.
+                                 Default: 7200, or the value sent by the server.";
+                }
             }
         }
         list prefix-list {
@@ -240,9 +298,24 @@ module vppcfg-bgp {
                     leaf as-path-list { type object-name; }
                     leaf as-path-contains { type asn; }
                     leaf origin-as { type asn; }
+                    leaf rpki {
+                        type enumeration {
+                            enum valid;
+                            enum invalid;
+                            enum not-found;
+                        }
+                        description "Origin validation result of the route. Routes without an origin AS
+                                     (own networks, an empty AS path) are not-found.";
+                    }
                 }
                 container set {
                     leaf local-preference { type uint32; }
+                    leaf preference {
+                        type uint16 { range "1..65535"; }
+                        description "Route preference in BIRD: selects between protocols, before any BGP
+                                     attribute. Higher is preferred, unlike VRP and IOS. Defaults: BGP 100,
+                                     static 200, direct 240.";
+                    }
                     leaf med { type uint32; }
                     leaf-list community { type community; }
                     leaf-list large-community { type large-community; }

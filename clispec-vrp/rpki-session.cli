@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: RPKI session view; context $addr = server address.
+CLICON_MODE="vrp-rpki-session";
+CLICON_PROMPT="[~%H-rpki-session]";
+CLICON_PLUGIN="cli_vppcfg";
+
+tcp("TCP transport") port("TCP port of the cache server (default 323)") <port:uint16 range[1:65535]>("Port, e.g. 8282"), vc_edit("<routing><rpki><session><address>$addr</address><port>$port</port></session></rpki></routing>");
+timer("Timers; a configured value is not replaced by the value sent by the server") {
+    aging("ROAs are deleted when they could not be refreshed for this time (default 7200)") <aging:uint32 range[600:172800]>("Seconds"), vc_edit("<routing><rpki><session><address>$addr</address><aging>$aging</aging></session></rpki></routing>");
+    refresh("Polling interval (default 3600)") <refresh:uint32 range[1:86399]>("Seconds"), vc_edit("<routing><rpki><session><address>$addr</address><refresh>$refresh</refresh></session></rpki></routing>");
+    retry("Wait after a failed poll (default 600)") <retry:uint32 range[1:7200]>("Seconds"), vc_edit("<routing><rpki><session><address>$addr</address><retry>$retry</retry></session></rpki></routing>");
+}
+connect-interface("Source address of the session") <src:string regexp:"[0-9a-fA-F:.]+">("IPv4 or IPv6 address"), vc_edit("<routing><rpki><session><address>$addr</address><source-address>$src</source-address></session></rpki></routing>");
+undo("Undo a command") {
+    tcp("TCP transport") port("Use the default port 323"), vc_edit("<routing><rpki><session><address>$addr</address><port nc:operation='remove'/></session></rpki></routing>");
+    timer("Timers") {
+        aging("Use the default or the value sent by the server"), vc_edit("<routing><rpki><session><address>$addr</address><aging nc:operation='remove'/></session></rpki></routing>");
+        refresh("Use the default or the value sent by the server"), vc_edit("<routing><rpki><session><address>$addr</address><refresh nc:operation='remove'/></session></rpki></routing>");
+        retry("Use the default or the value sent by the server"), vc_edit("<routing><rpki><session><address>$addr</address><retry nc:operation='remove'/></session></rpki></routing>");
+    }
+    connect-interface("Remove the source address"), vc_edit("<routing><rpki><session><address>$addr</address><source-address nc:operation='remove'/></session></rpki></routing>");
+}
+quit("Return to the RPKI view"), vc_if_exit("vrp-rpki");

@@ -16,10 +16,20 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
   clixon-vppcfg bgp-summary [--style cisco|vrp] [ipv4|ipv6]
                                          BGP peers per address family (show bgp all summary /
                                          display bgp all summary), from 'birdc show protocols all'
+  clixon-vppcfg rpki-session [address] [--style cisco|vrp]
+                                         RPKI cache servers: state, serial and ROAs, or details of one
+  clixon-vppcfg rpki-table statistics|<prefix> [--style cisco|vrp]
+                                         number of ROAs, or the ROAs covering a prefix
+  clixon-vppcfg rpki-validate <prefix> <asn> [--style cisco|vrp]
+                                         origin validation result of a prefix and origin AS
   clixon-vppcfg import <vppcfg.yaml>     print a Clixon XML datastore from vppcfg.yaml (initial migration)
   clixon-vppcfg render <cfg.xml>         print the rendered YAML (debugging)
   clixon-vppcfg show-config <cfg.xml> [--style cisco|vrp] [--if NAME]
                                          show the configuration (optionally one interface)
+  clixon-vppcfg show-list <cfg.xml> ip|ipv6|as-path|community|large-community [name] [--style cisco|vrp]
+                                         show prefix lists, AS-path filters or community lists and their entries
+  clixon-vppcfg show-list <cfg.xml> static4|static6 [--style cisco|vrp]
+                                         static routes and whether BIRD uses them
   clixon-vppcfg diff <a.xml> <b.xml> [--style cisco|vrp]
                                          unified diff of the rendered configuration from a to b
   clixon-vppcfg changed <a.xml> <b.xml>  exit 1 if a and b differ, 0 if identical
@@ -440,13 +450,15 @@ def cmd_banner(style):
 
 BGP_LISTS = {"network": "prefix", "peer-group": "name", "neighbor": "address", "prefix-list": "name",
              "entry": "seq", "community-list": "name", "large-community-list": "name", "as-path-list": "name",
-             "route-policy": "name", "node": "seq"}
+             "route-policy": "name", "node": "seq", "session": "address",
+             "static-route": ("prefix", "destination")}
 BGP_LEAFLISTS = {"community", "large-community"}
 BGP_INTS = {"local-as", "remote-as", "multihop", "hold-time", "keepalive", "max-prefix", "seq", "ge", "le",
-            "as-path-contains", "origin-as", "local-preference", "med"}
-BGP_BOOLS = {"activate", "next-hop-self", "bfd", "shutdown"}
+            "as-path-contains", "origin-as", "local-preference", "preference", "med", "port", "refresh", "retry",
+            "aging", "allow-local-as"}
+BGP_BOOLS = {"activate", "next-hop-self", "bfd", "shutdown", "reflect-client"}
 PEER_KEYS = ["remote-as", "description", "source-address", "password", "multihop", "bfd", "hold-time",
-             "keepalive", "shutdown"]
+             "keepalive", "shutdown", "allow-local-as", "reflect-client"]
 AF_KEYS = ["activate", "import-policy", "export-policy", "import-filter", "export-filter", "max-prefix",
            "next-hop-self"]
 
@@ -459,7 +471,8 @@ def bgp_elem(el):
         # (references) inside neighbor and match: an element without children is always a leaf.
         if n in BGP_LISTS and len(c):
             item = bgp_elem(c)
-            key = item.pop(BGP_LISTS[n])
+            keys = BGP_LISTS[n]
+            key = tuple(item.pop(k) for k in keys) if isinstance(keys, tuple) else item.pop(keys)
             d.setdefault(n, {})[key] = item
         elif n in BGP_LEAFLISTS:
             d.setdefault(n, []).append((c.text or "").strip())
@@ -476,6 +489,17 @@ def xml_to_bgp(path):
     for el in root.iter(f"{{{BGP_NS}}}routing"):
         return bgp_elem(el)
     return {}
+
+
+def static_routes(r, ver):
+    """(network, destination, route) of an address family, sorted by address."""
+    routes = [(ipaddress.ip_network(p, strict=False), d, e) for (p, d), e in r.get("static-route", {}).items()]
+    return sorted((x for x in routes if x[0].version == ver), key=lambda x: (x[0].network_address, x[0].prefixlen, x[1]))
+
+
+def rpki_sessions(r):
+    # An empty <rpki/> left by the last 'undo session' is parsed as a leaf
+    return (r.get("rpki") or {}).get("session", {})
 
 
 def is_ip(s):
@@ -523,6 +547,36 @@ def bgp_errors(r):
                 errs.append(f"large-community-list {name}: {c}: each part must be at most 4294967295")
     if (bgp.get("neighbor") or bgp.get("peer-group") or bgp.get("network")) and "local-as" not in bgp:
         errs.append("router bgp: the local AS number is not set")
+    static = {}
+    for (prefix, dest), e in r.get("static-route", {}).items():
+        where = f"static route {prefix}"
+        try:
+            net = ipaddress.ip_network(prefix)
+            if dest != "blackhole":
+                gw = ipaddress.ip_address(dest)
+                if gw.version != net.version:
+                    errs.append(f"{where}: next hop {dest} is of the other address family")
+                elif gw.is_link_local:
+                    errs.append(f"{where}: link-local next hop {dest} is not supported")
+        except ValueError as ex:
+            errs.append(f"{where}: {ex}")
+            continue
+        if net in static:
+            errs.append(f"{where}: one destination per prefix: remove {static[net]} or {dest}")
+        static[net] = dest
+        if any(not 1 <= int(a) <= 0xFFFFFFFF for a in e.get("prepend", "").split()):
+            errs.append(f"{where}: AS-path prepend {e['prepend']}: AS numbers must be 1..4294967295")
+    for p in bgp.get("network", {}):
+        if p in {str(n) for n in static}:
+            errs.append(f"network {p} is also a static route: keep one of them")
+    for addr, s in rpki_sessions(r).items():
+        if not is_ip(addr):
+            errs.append(f"RPKI session {addr}: not an IP address")
+        elif "source-address" in s and (not is_ip(s["source-address"]) or ipaddress.ip_address(s["source-address"]).version
+                                        != ipaddress.ip_address(addr).version):
+            errs.append(f"RPKI session {addr}: the source address must be an address of the same family")
+        if "refresh" in s and "aging" in s and s["refresh"] >= s["aging"]:
+            errs.append(f"RPKI session {addr}: aging {s['aging']} must be larger than refresh {s['refresh']}")
     for p in bgp.get("network", {}):
         try:
             ipaddress.ip_network(p, strict=True)
@@ -560,6 +614,8 @@ def bgp_errors(r):
                 errs.append(f"{where}: as-path-list {m['as-path-list']} does not exist")
             if "large-community-list" in m and m["large-community-list"] not in lcls:
                 errs.append(f"{where}: large-community-list {m['large-community-list']} does not exist")
+            if "rpki" in m and not rpki_sessions(r):
+                errs.append(f"{where}: an RPKI condition needs an RPKI session")
             for c in node.get("set", {}).get("large-community", []):
                 if not lc_ok(c):
                     errs.append(f"{where}: large community {c}: each part must be at most 4294967295")
@@ -605,10 +661,19 @@ def bgp_errors(r):
             errs.append(f"neighbor {addr}: BIRD name {proto} is already used"
                         + (f" by neighbor {protos[proto]}" if proto in protos else " by clixon-vppcfg"))
         protos[proto] = addr
+        if eff.get("reflect-client") and eff.get("remote-as") != bgp.get("local-as"):
+            errs.append(f"neighbor {addr}: a route reflector client must be an IBGP peer")
         if eff.get("bfd") and "multihop" in eff and "source-address" not in eff:
             errs.append(f"neighbor {addr}: BFD on a multihop session needs a source address "
                         "(update-source / connect-interface)")
     return errs
+
+
+RPKI_STATES = {"valid": "ROA_VALID", "invalid": "ROA_INVALID", "not-found": "ROA_UNKNOWN"}
+
+
+def policy_uses_rpki(r, name):
+    return any("rpki" in n.get("match", {}) for n in r.get("route-policy", {}).get(name, {}).get("node", {}).values())
 
 
 def bird_ident(prefix, s):
@@ -671,6 +736,11 @@ def cli_regex(rx):
     return f'"{rx}"' if "|" in rx else rx
 
 
+def aspath_cli(e):
+    """Pattern of an as-path-list entry as typed in the CLI."""
+    return cli_regex(e["regex"]) if "regex" in e else f"bird-mask {e.get('bird-mask', '?')}"
+
+
 def aspath_entry_mask(e):
     """BIRD path mask of an as-path-list entry (ValueError if invalid)."""
     if "regex" in e:
@@ -704,12 +774,45 @@ def bird_large_community(c):
     return f"({', '.join(str(int(x)) for x in c.split(':'))})"
 
 
+def bird_rpki(r):
+    """ROA tables, one protocol per cache server and the functions behind the RPKI route-policy condition."""
+    sessions = rpki_sessions(r)
+    if not sessions:
+        return []
+    out = ["roa4 table cx_roa4;", "roa6 table cx_roa6;", ""]
+    for addr in sorted(sessions, key=natural_key):
+        s = sessions[addr]
+        out.append(f"protocol rpki {bird_ident('cx_rpki_', addr)} {{")
+        out += ["  roa4 { table cx_roa4; };", "  roa6 { table cx_roa6; };"]
+        out.append(f"  remote {addr}" + (f" port {s['port']}" if "port" in s else "") + ";")
+        if "source-address" in s:
+            out.append(f"  local address {s['source-address']};")
+        # keep: a configured timer is not replaced by the value sent by the server
+        for leaf, opt in (("refresh", "refresh"), ("retry", "retry"), ("aging", "expire")):
+            if leaf in s:
+                out.append(f"  {opt} keep {s[leaf]};")
+        out += ["}", ""]
+    used = {n.get("match", {}).get("rpki") for rp in r.get("route-policy", {}).values()
+            for n in rp.get("node", {}).values()}
+    for state, roa in RPKI_STATES.items():
+        if state in used:
+            # Without an AS path there is no origin AS: BIRD would check AS 0, which is invalid under any ROA
+            out.append(f"function {bird_ident('cx_rpki_', state)}() -> bool {{")
+            out.append(f"  if bgp_path.len = 0 then return {'true' if state == 'not-found' else 'false'};")
+            for ver in (4, 6):
+                out.append(f"  if net.type = NET_IP{ver} then return "
+                           f"roa_check(cx_roa{ver}, net, bgp_path.last_nonaggregated) = {roa};")
+            out += ["  return false;", "}", ""]
+    return out
+
+
 def render_bird(r):
     out = ["# /etc/bird/bird-clixon.conf — GENERATED by clixon-vppcfg from the Clixon datastore.",
            "# Do not edit by hand: changes are overwritten on the next commit.",
            "# Change BGP with the `rtr` or `vrp` CLI; hand-written configuration stays in bird.conf.", ""]
     if "router-id" in r:
         out += [f"router id {r['router-id']};", ""]
+    out += bird_rpki(r)
     bgp = r.get("bgp", {})
     las = bgp.get("local-as")
     for name, pl in r.get("prefix-list", {}).items():
@@ -750,10 +853,14 @@ def render_bird(r):
                 conds.append(f"bgp_path ~ [= * {m['as-path-contains']} * =]")
             if "origin-as" in m:
                 conds.append(f"bgp_path.last = {m['origin-as']}")
+            if "rpki" in m:
+                conds.append(f"{bird_ident('cx_rpki_', m['rpki'])}()")
             body = []
             if node.get("action") == "permit":
                 if "local-preference" in st:
                     body.append(f"bgp_local_pref = {st['local-preference']};")
+                if "preference" in st:
+                    body.append(f"preference = {st['preference']};")
                 if "med" in st:
                     body.append(f"bgp_med = {st['med']};")
                 for c in st.get("community", []):
@@ -781,6 +888,19 @@ def render_bird(r):
             out.append(f"  {af};")
             out += [f"  route {p} blackhole;" for p in sorted(fam, key=natural_key)]
             out += ["}", ""]
+    for ver in (4, 6):
+        routes = static_routes(r, ver)
+        if routes:
+            out += [f"protocol static cx_static{ver} {{", f"  ipv{ver};"]
+            for net, dest, e in routes:
+                gw = "blackhole" if dest == "blackhole" else f"via {dest}"
+                path = e.get("prepend", "").split()
+                if path:
+                    # prepend() adds in front: the last AS first, so the first ends up leftmost
+                    out += [f"  route {net} {gw} {{"] + [f"    bgp_path.prepend({a});" for a in reversed(path)] + ["  };"]
+                else:
+                    out.append(f"  route {net} {gw};")
+            out += ["}", ""]
     neighbors = bgp.get("neighbor", {})
     effs = {a: effective_peer(bgp, a) for a in neighbors}
     if any(e.get("bfd") for e in effs.values()):
@@ -805,6 +925,11 @@ def render_bird(r):
             out.append(f"  hold time {e['hold-time']};")
         if "keepalive" in e:
             out.append(f"  keepalive time {e['keepalive']};")
+        if e.get("reflect-client"):
+            out.append("  rr client;")
+        # Always with a number: without one BIRD disables the loop check altogether
+        if "allow-local-as" in e:
+            out.append(f"  allow local as {e['allow-local-as']};")
         if e.get("shutdown"):
             out.append("  disabled;")
         for af in ("ipv4", "ipv6"):
@@ -816,6 +941,9 @@ def render_bird(r):
                 if a.get(f"{d}-filter"):
                     ch.append(f"{d} filter {a[f'{d}-filter']};")
                 elif a.get(f"{d}-policy"):
+                    # BIRD revalidates routes after a ROA change only from the import or export table
+                    if policy_uses_rpki(r, a[f"{d}-policy"]):
+                        ch.append(f"{d} table on;")
                     ch.append(f"{d} filter {bird_ident('cx_rp_', a[f'{d}-policy'])};")
                 else:
                     ch.append(f"{d} none;")
@@ -1173,6 +1301,11 @@ def vrp_lines(cfg, only=None):
     return out
 
 
+def session_af(name):
+    """Address family that shows a setting of the whole session: the one of the peer address."""
+    return "ipv6" if ":" in name else "ipv4"
+
+
 def peer_order(bgp):
     groups = sorted(bgp.get("peer-group", {}), key=natural_key)
     neighbors = sorted(bgp.get("neighbor", {}),
@@ -1187,13 +1320,26 @@ def prefix_list_family(pl):
 def cisco_bgp_lines(r):
     out = []
     bgp = r.get("bgp", {})
-    if bgp or "router-id" in r:
+    for ver, cmd in ((4, "ip"), (6, "ipv6")):
+        for net, dest, e in static_routes(r, ver):
+            line = f"{cmd} route {net} {'Null0' if dest == 'blackhole' else dest}"
+            out.append(line + (f" as-path {e['prepend']}" if "prepend" in e else ""))
+    if out:
+        out.append("!")
+    if bgp or "router-id" in r or rpki_sessions(r):
         if "local-as" in bgp:
             out.append(f"router bgp {bgp['local-as']}")
             if "router-id" in r:
                 out.append(f" bgp router-id {r['router-id']}")
         elif "router-id" in r:
             out.append(f"router-id {r['router-id']}")
+        for addr in sorted(rpki_sessions(r), key=natural_key):
+            s = rpki_sessions(r)[addr]
+            line = f" bgp rpki server tcp {addr}"
+            line += f" port {s['port']}" if "port" in s else ""
+            line += "".join(f" {k} {s[k]}" for k in ("refresh", "retry", "aging") if k in s)
+            line += f" source {s['source-address']}" if "source-address" in s else ""
+            out.append(line)
         groups, neighbors = peer_order(bgp)
 
         def peer(name, p, group):
@@ -1241,6 +1387,10 @@ def cisco_bgp_lines(r):
                     lines.append(f"  neighbor {name} maximum-prefix {a['max-prefix']}")
                 if a.get("next-hop-self"):
                     lines.append(f"  neighbor {name} next-hop-self")
+                if "allow-local-as" in p and af == session_af(name):
+                    lines.append(f"  neighbor {name} allowas-in {p['allow-local-as']}")
+                if p.get("reflect-client") and af == session_af(name):
+                    lines.append(f"  neighbor {name} route-reflector-client")
             if lines:
                 out += [" !", f" address-family {af} unicast"] + lines + [" exit-address-family"]
         out.append("!")
@@ -1264,8 +1414,7 @@ def cisco_bgp_lines(r):
     for name, al in r.get("as-path-list", {}).items():
         for seq in sorted(al.get("entry", {})):
             e = al["entry"][seq]
-            pat = cli_regex(e["regex"]) if "regex" in e else f"bird-mask {e.get('bird-mask', '?')}"
-            out.append(f"ip as-path access-list {name} seq {seq} {e.get('action', '?')} {pat}")
+            out.append(f"ip as-path access-list {name} seq {seq} {e.get('action', '?')} {aspath_cli(e)}")
         out.append("!")
     for name, rp in r.get("route-policy", {}).items():
         for seq in sorted(rp.get("node", {})):
@@ -1284,8 +1433,12 @@ def cisco_bgp_lines(r):
                 out.append(f" match as-path contains {m['as-path-contains']}")
             if "origin-as" in m:
                 out.append(f" match as-path origin {m['origin-as']}")
+            if "rpki" in m:
+                out.append(f" match rpki {m['rpki']}")
             if "local-preference" in st:
                 out.append(f" set local-preference {st['local-preference']}")
+            if "preference" in st:
+                out.append(f" set preference {st['preference']}")
             if "med" in st:
                 out.append(f" set metric {st['med']}")
             if st.get("community"):
@@ -1302,6 +1455,23 @@ def vrp_bgp_lines(r, section=None):
     """Huawei VRP rendering; section = None (all), "bgp" or "route-policy:<name>"."""
     out = []
     bgp = r.get("bgp", {})
+    if section is None:
+        for ver, cmd in ((4, "ip"), (6, "ipv6")):
+            routes = static_routes(r, ver)
+            out += ["#"] if routes else []
+            for net, dest, e in routes:
+                line = f"{cmd} route-static {net.network_address} {net.prefixlen} {'NULL0' if dest == 'blackhole' else dest}"
+                out.append(line + (f" as-path {e['prepend']}" if "prepend" in e else ""))
+    if section in (None, "rpki") and rpki_sessions(r):
+        out += ["#", "rpki"]
+        for addr in sorted(rpki_sessions(r), key=natural_key):
+            s = rpki_sessions(r)[addr]
+            out.append(f" session {addr}")
+            if "port" in s:
+                out.append(f"  tcp port {s['port']}")
+            out += [f"  timer {k} {s[k]}" for k in ("aging", "refresh", "retry") if k in s]
+            if "source-address" in s:
+                out.append(f"  connect-interface {s['source-address']}")
     if section in (None, "bgp") and (bgp or "router-id" in r):
         out.append("#")
         if "local-as" in bgp:
@@ -1361,6 +1531,10 @@ def vrp_bgp_lines(r, section=None):
                     lines.append(f"  peer {name} route-limit {a['max-prefix']}")
                 if a.get("next-hop-self"):
                     lines.append(f"  peer {name} next-hop-local")
+                if "allow-local-as" in p and af == session_af(name):
+                    lines.append(f"  peer {name} allow-as-loop {p['allow-local-as']}")
+                if p.get("reflect-client") and af == session_af(name):
+                    lines.append(f"  peer {name} reflect-client")
             if lines:
                 out += [" #", f" {af}-family unicast"] + lines
     if section is None:
@@ -1384,8 +1558,7 @@ def vrp_bgp_lines(r, section=None):
             out.append("#")
             for seq in sorted(al.get("entry", {})):
                 e = al["entry"][seq]
-                pat = cli_regex(e["regex"]) if "regex" in e else f"bird-mask {e.get('bird-mask', '?')}"
-                out.append(f"ip as-path-filter {name} index {seq} {e.get('action', '?')} {pat}")
+                out.append(f"ip as-path-filter {name} index {seq} {e.get('action', '?')} {aspath_cli(e)}")
     for name, rp in r.get("route-policy", {}).items():
         if section not in (None, f"route-policy:{name}"):
             continue
@@ -1405,8 +1578,12 @@ def vrp_bgp_lines(r, section=None):
                 out.append(f" if-match as-path contains {m['as-path-contains']}")
             if "origin-as" in m:
                 out.append(f" if-match as-path origin {m['origin-as']}")
+            if "rpki" in m:
+                out.append(f" if-match rpki origin-as-validation {m['rpki']}")
             if "local-preference" in st:
                 out.append(f" apply local-preference {st['local-preference']}")
+            if "preference" in st:
+                out.append(f" apply preference {st['preference']}")
             if "med" in st:
                 out.append(f" apply cost {st['med']}")
             for c in st.get("community", []):
@@ -1422,7 +1599,7 @@ def render_lines(cfg, style, only=None, bgp=None, system=None):
     bgp = bgp or {}
     host = (system or {}).get("hostname")
     if style == "vrp":
-        if only in ("bgp",) or (only or "").startswith("route-policy:"):
+        if only in ("bgp", "rpki") or (only or "").startswith("route-policy:"):
             lines = vrp_bgp_lines(bgp, only)
             return lines + ["#", "return"] if lines else []
         lines = vrp_lines(cfg, only)
@@ -1450,6 +1627,166 @@ def cmd_show_config(xml_path, style="cisco", only=None):
     lines = render_lines(xml_to_cfg(xml_path), style, only, xml_to_bgp(xml_path), xml_to_system(xml_path))
     empty = "# (no configuration)" if style == "vrp" else "! (no configuration)"
     print("\n".join(lines) if lines else empty)
+
+
+def prefix_entry(e):
+    line = e.get("prefix", "?")
+    line += f" ge {e['ge']}" if "ge" in e else ""
+    line += f" le {e['le']}" if "le" in e else ""
+    return line
+
+
+def cmd_show_list(xml_path, kind, style="cisco", name=None):
+    """show ip|ipv6 prefix-list, show ip as-path-access-list|community-list|large-community-list;
+    display ip ip-prefix|ipv6-prefix|as-path-filter|community-filter|large-community-filter."""
+    r = xml_to_bgp(xml_path)
+    vrp = style == "vrp"
+    if kind == "as-path":
+        lists = {n: al.get("entry", {}) for n, al in r.get("as-path-list", {}).items()}
+        what = "AS-path filter" if vrp else "AS-path access list"
+        title, entry = ("As path filter {}" if vrp else "AS path access list {}"), aspath_cli
+    elif kind in ("community", "large-community"):
+        lists = {n: cl.get(kind, []) for n, cl in r.get(f"{kind}-list", {}).items()}
+        what = kind.replace("-", " ") + (" filter" if vrp else " list")
+        title = what.capitalize() + " {}"
+    else:
+        # A list can hold both families; each command shows the entries of its own, like the configuration
+        lists = {n: {s: e for s, e in pl.get("entry", {}).items() if (":" in e.get("prefix", "")) == (kind == "ipv6")}
+                 for n, pl in r.get("prefix-list", {}).items()}
+        lists = {n: entries for n, entries in lists.items() if entries}
+        what = ("IPv6" if kind == "ipv6" else "IP") + " prefix list"
+        title, entry = ("Prefix-list {}" if vrp else f"{kind} prefix-list {{}}"), prefix_entry
+    if name is not None and name not in lists:
+        die(("Error: " if vrp else "% ") + f"{what[0].upper()}{what[1:]} {name} does not exist")
+    if not lists:
+        print(f"Info: No {what} is configured." if vrp else f"% No {what} configured.")
+    out = []
+    for n in [name] if name is not None else sorted(lists, key=natural_key):
+        out.append(title.format(n))
+        if kind in ("community", "large-community"):
+            out += [f"        permit  {c}" if vrp else f"   permit {c}" for c in lists[n]]
+        else:
+            for seq in sorted(lists[n]):
+                e = lists[n][seq]
+                act = e.get("action", "?")
+                out.append(f"        index: {seq:<10} {act:<7} {entry(e)}" if vrp else f"   seq {seq} {act} {entry(e)}")
+        out.append("")
+    if out:
+        print("\n".join(out[:-1]))
+
+
+def cmd_show_static(xml_path, ver, style="cisco"):
+    routes = static_routes(xml_to_bgp(xml_path), ver)
+    if not routes:
+        print("Info: No static route is configured." if style == "vrp" else "% No static route configured.")
+        return
+    best = {}
+    for line in birdc("show", "route", "protocol", f"cx_static{ver}").splitlines():
+        m = re.match(r"(\S+/\d+)\s+\S+\s+\[[^\]]*\]\s*(\*?)", line)
+        if m:
+            best[ipaddress.ip_network(m.group(1))] = "Active" if m.group(2) else "Standby"
+    null = "NULL0" if style == "vrp" else "Null0"
+    print(f"{'Destination':<44} {'Next hop':<40} {'State':<9} AS path")
+    for net, dest, e in routes:
+        print(f"{str(net):<44} {null if dest == 'blackhole' else dest:<40} {best.get(net, 'Inactive'):<9} "
+              f"{e.get('prepend', '')}".rstrip())
+
+
+def birdc(*args):
+    r = subprocess.run([BIRDC, *args], capture_output=True, text=True)
+    return "\n".join(l for l in (r.stdout + r.stderr).splitlines() if not re.match(r"BIRD \S+ ready", l))
+
+
+def no_rpki(style):
+    print("Info: No RPKI session is configured." if style == "vrp" else "% No RPKI server configured.")
+
+
+def bird_rpki_sessions(text):
+    """RPKI protocols from 'birdc show protocols all': dicts with state, server, port, status, serial,
+    updated and the imported ROAs per channel."""
+    sessions, cur, chan = [], None, None
+    for line in text.splitlines():
+        m = re.match(r"\S+\s+RPKI\s+\S+\s+(\S+)", line)
+        if m:
+            cur = {"state": m.group(1), "roa4": "-", "roa6": "-"}
+            sessions.append(cur)
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"\s+Channel (roa[46])", line)
+        if m:
+            chan = m.group(1)
+            continue
+        m = re.match(r"\s+(Cache server|Cache port|Status|Serial number|Last update|Routes):\s+(.*)", line)
+        if m and m.group(1) == "Routes":
+            cur[chan] = m.group(2).split()[0]
+        elif m:
+            key = {"Cache server": "server", "Cache port": "port", "Status": "status",
+                   "Serial number": "serial", "Last update": "updated"}[m.group(1)]
+            cur[key] = m.group(2).replace("before ", "").strip()
+    return sessions
+
+
+def cmd_rpki_session(style, addr=None):
+    if addr is not None:
+        print(birdc("show", "protocols", "all", bird_ident("cx_rpki_", addr)))
+        return
+    sessions = bird_rpki_sessions(birdc("show", "protocols", "all", '"cx_rpki_*"'))
+    if not sessions:
+        no_rpki(style)
+        return
+    print(f"{'Server':<26} {'Port':<6} {'State':<6} {'Status':<30} {'Serial':<11} {'Updated':<12} {'ROA4':<8} ROA6")
+    for s in sessions:
+        print(f"{s.get('server', '?'):<26} {s.get('port', '?'):<6} {s['state']:<6} {s.get('status', '?'):<30} "
+              f"{s.get('serial', '-'):<11} {s.get('updated', '-'):<12} {s['roa4']:<8} {s['roa6']}")
+
+
+def rpki_net(prefix, style):
+    try:
+        return ipaddress.ip_network(prefix, strict=False)
+    except ValueError:
+        die(("Error: " if style == "vrp" else "% ") + f"{prefix} is not an IP address or prefix")
+
+
+def cmd_rpki_table(arg, style):
+    if arg == "statistics":
+        counts = [re.search(r"(\d+) of \d+ routes", birdc("show", "route", "table", t, "count"))
+                  for t in ("cx_roa4", "cx_roa6")]
+        if None in counts:
+            no_rpki(style)
+        else:
+            print(f"IPv4 ROAs: {counts[0].group(1)}\nIPv6 ROAs: {counts[1].group(1)}")
+        return
+    net = rpki_net(arg, style)
+    table = f"cx_roa{net.version}"
+    text = birdc(f"show route table {table} where net.len <= {net.prefixlen}"
+                 f" && ({net.network_address}).mask(net.len) = net.ip")
+    if "syntax error" in text or "No such table" in text:
+        no_rpki(style)
+        return
+    # Several caches give the same ROA: show it once
+    roas = sorted({re.match(r"(\S+)-(\d+) AS(\d+)", l).groups() for l in text.splitlines()
+                   if re.match(r"\S+-\d+ AS\d+", l)}, key=lambda x: natural_key(x[0]))
+    if not roas:
+        print(f"No ROA covers {net}")
+        return
+    print(f"{'Network':<44} {'MaxLen':<7} Origin AS")
+    for prefix, maxlen, asn in roas:
+        print(f"{prefix:<44} {maxlen:<7} {asn}")
+
+
+def cmd_rpki_validate(prefix, asn, style):
+    net = rpki_net(prefix, style)
+    table = f"cx_roa{net.version}"
+    for state, roa, label in (("valid", "ROA_VALID", "Valid"), ("invalid", "ROA_INVALID", "Invalid")):
+        text = birdc(f"eval roa_check({table}, {net}, {asn}) = {roa}")
+        if "TRUE" not in text and "FALSE" not in text:
+            no_rpki(style)
+            return
+        if "TRUE" in text:
+            print(f"{net} origin AS {asn}: {label}")
+            return
+    print(f"{net} origin AS {asn}: NotFound")
 
 
 def cmd_diff(a_path, b_path, style="cisco"):
@@ -1552,10 +1889,21 @@ def main():
         cmd_bgp_summary(style, args or ["ipv4", "ipv6"])
     elif verb == "bgp-neighbor" and len(args) == 1:
         cmd_bgp_neighbor(args[0])
+    elif verb == "rpki-session" and len(args) <= 1:
+        cmd_rpki_session(style, *args)
+    elif verb == "rpki-table" and len(args) == 1:
+        cmd_rpki_table(args[0], style)
+    elif verb == "rpki-validate" and len(args) == 2:
+        cmd_rpki_validate(args[0], args[1], style)
     elif verb == "render" and len(args) == 1:
         sys.stdout.write(render_yaml(xml_to_cfg(args[0])))
     elif verb == "show-config" and len(args) == 1:
         cmd_show_config(args[0], style, only)
+    elif verb == "show-list" and len(args) == 2 and args[1] in ("static4", "static6"):
+        cmd_show_static(args[0], int(args[1][-1]), style)
+    elif verb == "show-list" and len(args) in (2, 3) and args[1] in ("ip", "ipv6", "as-path", "community",
+                                                                     "large-community"):
+        cmd_show_list(args[0], args[1], style, *args[2:])
     elif verb == "diff" and len(args) == 2:
         cmd_diff(*args, style=style)
     elif verb == "changed" and len(args) == 2:

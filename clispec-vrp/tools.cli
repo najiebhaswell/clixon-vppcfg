@@ -2,7 +2,7 @@
 # Huawei VRP style: ping, tracert, mtr and DNS lookups, in every view like on VRP.
 # Run through nettool (sudo, group clicon): the dataplane namespace by default, -vpn-instance mgmt for
 # the management network. Ctrl-C stops a running command.
-CLICON_MODE="user:system:vrp-if:vrp-subif:vrp-loop:vrp-trunk:vrp-bgp:vrp-bgp-af:vrp-rpolicy";
+CLICON_MODE="user:system:vrp-if:vrp-subif:vrp-loop:vrp-trunk:vrp-bgp:vrp-bgp-af:vrp-rpolicy:vrp-rpki:vrp-rpki-session";
 CLICON_PLUGIN="cli_vppcfg";
 
 ping("Send ICMP echo requests through the router's routing table (or -vpn-instance mgmt)") [<v6:string keyword:ipv6>("IPv6 destination")] [-a("Source address") <src:string regexp:"[0-9a-fA-F:.]+">("Source IPv4 or IPv6 address (one of this router's addresses)")] [-c("Number of echo requests (default 5)") <count:uint32 range[1:1000]>("Count")] [<df:string keyword:-f>("Set the don't-fragment bit (path MTU test)")] [-s("ICMP payload size (default 56 bytes)") <size:uint32 range[0:65000]>("Bytes, without the IP and ICMP headers")] [-vpn-instance("Network to use") (<vpn:string keyword:mgmt>("Management network (the host's own interfaces, e.g. eno1)")|<vpn:string keyword:dataplane>("The router's routing table through VPP (default)"))] <host:string>("Destination address or host name (resolved through the management network)"), vc_run("/usr/bin/sudo", "-n", "/usr/local/libexec/clixon-vppcfg/nettool", "--ns=$vpn", "+v6:-6", "--source=$src", "--count=$count", "+df:--df", "--size=$size", "--", "ping", "$host");

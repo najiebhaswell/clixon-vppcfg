@@ -5,6 +5,7 @@ CLICON_PROMPT="%H(config-route-map)# ";
 CLICON_PLUGIN="cli_vppcfg";
 
 match("Conditions; all must be true for this sequence to apply") {
+    rpki("Origin validation result; the first use on a peer restarts its BGP session, to enable the BIRD import or export table") (<rv:string keyword:invalid>("Routes with a covering ROA but another origin AS or a longer prefix")|<rv:string keyword:not-found>("Routes without a covering ROA, and routes without an origin AS")|<rv:string keyword:valid>("Routes with a matching ROA")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><rpki>$rv</rpki></match></node></route-policy></routing>");
     ip("IPv4") address("Destination prefix") prefix-list("Match a prefix list") (<pl:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "Prefix list")>("Prefix list")|<pl:string>("Prefix list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list>$pl</prefix-list></match></node></route-policy></routing>");
     ipv6("IPv6") address("Destination prefix") prefix-list("Match a prefix list") (<pl:string vc_expand_names("/bgp:routing/bgp:prefix-list", "name", "Prefix list")>("Prefix list")|<pl:string>("Prefix list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list>$pl</prefix-list></match></node></route-policy></routing>");
     community("Route carries any community of a community list") (<cl:string vc_expand_names("/bgp:routing/bgp:community-list", "name", "Community list")>("Community list")|<cl:string>("Community list name")), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><community-list>$cl</community-list></match></node></route-policy></routing>");
@@ -16,6 +17,7 @@ match("Conditions; all must be true for this sequence to apply") {
     }
 }
 set("Actions applied when this sequence permits a route") {
+    preference("Route preference in BIRD (higher is preferred, unlike VRP and IOS): BGP 100, static 200, direct 240") <pref:uint16 range[1:65535]>("Preference"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><preference>$pref</preference></set></node></route-policy></routing>");
     local-preference("BGP local preference (higher is preferred, default 100)") <lp:uint32>("Local preference"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><local-preference>$lp</local-preference></set></node></route-policy></routing>");
     metric("MED announced to the neighbor (lower is preferred)") <med:uint32>("MED"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med>$med</med></set></node></route-policy></routing>");
     community("Add a community; repeat for more") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community ASN:value, e.g. 65000:100") [additive("Keep existing communities (always the case)")], vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community>$comm</community></set></node></route-policy></routing>");
@@ -42,6 +44,7 @@ set("Actions applied when this sequence permits a route") {
 }
 no("Negate a command") {
     match("Remove a condition") {
+        rpki("Remove the origin validation condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><rpki nc:operation='remove'/></match></node></route-policy></routing>");
         ip("IPv4") address("Destination prefix") prefix-list("Remove the prefix list condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list nc:operation='remove'/></match></node></route-policy></routing>");
         ipv6("IPv6") address("Destination prefix") prefix-list("Remove the prefix list condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><prefix-list nc:operation='remove'/></match></node></route-policy></routing>");
         large-community("Remove the large community condition"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><match><large-community-list nc:operation='remove'/></match></node></route-policy></routing>");
@@ -52,6 +55,7 @@ no("Negate a command") {
         }
     }
     set("Remove an action") {
+        preference("Remove the route preference action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><preference nc:operation='remove'/></set></node></route-policy></routing>");
         local-preference("Remove the local preference action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><local-preference nc:operation='remove'/></set></node></route-policy></routing>");
         metric("Remove the MED action"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><med nc:operation='remove'/></set></node></route-policy></routing>");
         community("Remove a community") <comm:string regexp:"[0-9]{1,5}:[0-9]{1,5}">("Community ASN:value, e.g. 65000:100"), vc_edit("<routing><route-policy><name>$rp</name><node><seq>$rseq</seq><set><community nc:operation='remove'>$comm</community></set></node></route-policy></routing>");

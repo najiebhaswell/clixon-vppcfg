@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Huawei VRP style: RPKI view (prompt "[~BR-rpki]").
+CLICON_MODE="vrp-rpki";
+CLICON_PROMPT="[~%H-rpki]";
+CLICON_PLUGIN="cli_vppcfg";
+
+session("Enter the view of an RPKI cache server; created if new") (<addr:string vc_expand_names("/bgp:routing/bgp:rpki/bgp:session", "address", "Existing session")>("Existing session")|<addr:string regexp:"[0-9a-fA-F:.]+">("Server IPv4 or IPv6 address")), vc_enter("vrp-rpki-session", "<routing><rpki><session><address>$addr</address></session></rpki></routing>", "addr=$addr");
+undo("Undo a command") session("Remove an RPKI cache server") (<addr:string vc_expand_names("/bgp:routing/bgp:rpki/bgp:session", "address", "Existing session")>("Existing session")|<addr:string regexp:"[0-9a-fA-F:.]+">("Server address")), vc_edit("<routing><rpki><session nc:operation='remove'><address>$addr</address></session></rpki></routing>");
+quit("Return to the system view"), vc_if_exit("system");

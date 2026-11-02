@@ -711,6 +711,24 @@ vc_show_diff(clixon_handle h,
     return 0;
 }
 
+/* show ip prefix-list | as-path-access-list [<name>], show ip route static: argv = (kind [, "vrp"]), kind as in
+ * show-list */
+int
+vc_show_list(clixon_handle h,
+             cvec         *cvv,
+             cvec         *argv)
+{
+    char  path[] = "/tmp/rtr-config-XXXXXX";
+    char *args[] = {HELPER, "show-list", path, (char *)arg_str(argv, 0), "--style", style_arg(argv, 1),
+                    cvec_find_str(cvv, "name"), NULL};
+
+    if (dump_db(h, "running", path) < 0)
+        return -1;
+    run_prog(args, 0);
+    unlink(path);
+    return 0;
+}
+
 /* show ip interface brief: argv = ([ "vrp" ]) */
 int
 vc_ip_brief(clixon_handle h,
@@ -1453,6 +1471,8 @@ vc_display_this(clixon_handle h,
 
     if (mode != NULL && (strcmp(mode, "vrp-bgp") == 0 || strcmp(mode, "vrp-bgp-af") == 0))
         args[6] = "bgp";
+    else if (mode != NULL && (strcmp(mode, "vrp-rpki") == 0 || strcmp(mode, "vrp-rpki-session") == 0))
+        args[6] = "rpki";
     else if (mode != NULL && strcmp(mode, "vrp-rpolicy") == 0 && _ctx && (rp = cvec_find(_ctx, "rp"))) {
         snprintf(section, sizeof(section), "route-policy:%s", cv_string_get(rp));
         args[6] = section;
@@ -1516,6 +1536,10 @@ vc_prompt(clixon_handle h,
     }
     else if (strcmp(mode, "vrp-rpolicy") == 0)
         snprintf(buf, sizeof(buf), "[%c%%H-route-policy]", mark);
+    else if (strcmp(mode, "vrp-rpki") == 0)
+        snprintf(buf, sizeof(buf), "[%c%%H-rpki]", mark);
+    else if (strcmp(mode, "vrp-rpki-session") == 0)
+        snprintf(buf, sizeof(buf), "[%c%%H-rpki-session]", mark);
     else {
         vrp_ifname(_ifname, name, sizeof(name));
         snprintf(buf, sizeof(buf), "[%c%%H-%s]", mark, name);
