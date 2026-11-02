@@ -120,7 +120,7 @@ one-shot: `rtr show running-config`.
 | Mode | Commands |
 |---|---|
 | exec (`BR#`) | `configure [terminal]`, `show ...`, `exit` |
-| configure (`BR(config)#`) | `interface <name>`, `no interface <name>`, `commit`, `validate`, `abort`, `end` |
+| configure (`BR(config)#`) | `hostname <name>`, `no hostname`, `interface <name>`, `no interface <name>`, `commit`, `validate`, `abort`, `end` |
 | all interface modes | `description`, `mtu`, `ip address A.B.C.D/n`, `ipv6 address X::/n`, `lcp`, `unnumbered`, `mpls enable`, `no ...`, `exit`, plus `commit`/`validate`/`abort`/`end`/`show` |
 | physical (`BR(config-if)#`) | `mac-address`, `shutdown`, `l2xc`, `sflow enable` |
 | sub-interface (`BR(config-subif)#`) | `encapsulation dot1q\|dot1ad <vid> [inner-dot1q <vid>] [exact-match]`, `shutdown`, `l2xc` |
@@ -133,6 +133,17 @@ The interface name selects its type and mode: `loopN` (loopback), `BondEthernetN
 the commands that apply, and `TAB` on `interface` shows each interface's type and description. A physical interface that does not exist in
 VPP is rejected as soon as you type `interface <name>`; loopbacks and bonds may be new, and `TAB`
 suggests the next free `loopN` and `BondEthernetN`.
+
+### Hostname and banner
+
+The hostname is part of the configuration: `hostname BR1` in `rtr` configure mode, `sysname BR1` in the
+`vrp` system view. It is applied last in a commit with `hostnamectl` and the 127.0.1.1 line of `/etc/hosts`,
+and the prompt follows it right away; snmpd is restarted so that SNMP `sysName` follows too. `no hostname` / `undo sysname` only stop managing the name: the Linux
+hostname stays as it is, as it does on a system that never configured one.
+
+An interactive `rtr` or `vrp` session starts with a logo and a status line (hostname and the VPP, BIRD and
+clixon-vppcfg versions). Nothing is printed for scripts or a command on the command line (`rtr show ...`), and
+`NO_COLOR` turns the colors off. To replace the logo, put your own text in `/etc/clixon-vppcfg/banner`.
 
 ### BGP
 

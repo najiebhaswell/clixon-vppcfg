@@ -6,4 +6,6 @@ CLICON_PLUGIN="cli_vppcfg";
 
 interface("Select an interface, or create a loopback, bond or sub-interface") (<ifname:string vc_expand_ifs("new")>("Interface name")|<ifname:string>("New interface: loopN, BondEthernetN, or <parent>.<vlan> for a sub-interface")), vc_if_enter();
 no("Negate a command") interface("Remove all configuration of an interface (loopbacks, bonds and sub-interfaces are deleted)") (<ifname:string vc_expand_ifs()>("Interface name")|<ifname:string>("Interface name")), vc_no_interface();
+hostname("Device name: the Linux hostname, shown in the prompt") <name:string regexp:"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?">("Letters, digits and hyphens, up to 63 characters"), vc_sys_edit("<system><hostname>$name</hostname></system>");
+no("Negate a command") hostname("Stop managing the device name (the Linux hostname stays as it is)"), vc_sys_edit("<system><hostname nc:operation='remove'/></system>");
 exit("Return to exec mode (refused while there are uncommitted changes)"), vc_end();

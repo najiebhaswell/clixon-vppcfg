@@ -15,4 +15,6 @@ interface("Enter an interface view, or create an Eth-Trunk, LoopBack or sub-inte
     }
 }
 undo("Undo a command") interface("Delete an Eth-Trunk, LoopBack or sub-interface, or clear the configuration of a physical interface") (<ifname:string vc_expand_ifs("all", "vrp")>("Interface name")|<ifname:string>("Interface name")), vc_no_interface();
+sysname("Device name: the Linux hostname, shown in the prompt") <name:string regexp:"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?">("Letters, digits and hyphens, up to 63 characters"), vc_sys_edit("<system><hostname>$name</hostname></system>");
+undo("Undo a command") sysname("Stop managing the device name (the Linux hostname stays as it is)"), vc_sys_edit("<system><hostname nc:operation='remove'/></system>");
 quit("Return to the user view (refused while there are uncommitted changes)"), vc_end("user");

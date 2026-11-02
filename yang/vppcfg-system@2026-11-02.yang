@@ -1,0 +1,28 @@
+module vppcfg-system {
+    yang-version 1.1;
+    namespace "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg-system";
+    prefix sys;
+
+    organization "clixon-vppcfg";
+    contact "https://github.com/najiebhaswell/clixon-vppcfg";
+    description
+        "Device settings outside VPP and BIRD. Applied last in a commit.
+
+         Copyright 2026 Najieb Haswell. Licensed under the Apache License, Version 2.0.";
+
+    revision 2026-11-02 {
+        description "Phase 3: hostname.";
+    }
+
+    container system {
+        leaf hostname {
+            type string {
+                length "1..63";
+                pattern '[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?';
+            }
+            description
+                "Linux hostname (hostnamectl and the 127.0.1.1 line of /etc/hosts), shown in the
+                 CLI prompt. Without this leaf the hostname of the system is left as it is.";
+        }
+    }
+}

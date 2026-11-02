@@ -2,5 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Router CLI, Huawei VRP style. Same datastore and commit path as "rtr" (Cisco style).
 # Users must be members of the clicon, vpp and bird groups.
+# The banner is for interactive sessions only, not for scripts or a command on the command line.
+if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+    /usr/local/libexec/clixon-vppcfg/clixon-vppcfg banner --style vrp || true
+fi
 exec /usr/local/bin/clixon_cli -f /etc/clixon/vppcfg.xml -l s \
     -o CLICON_CLISPEC_DIR=/usr/local/lib/clixon-vppcfg/clispec-vrp -o CLICON_CLI_MODE=user "$@"

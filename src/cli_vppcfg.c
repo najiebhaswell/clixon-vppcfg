@@ -36,6 +36,7 @@
 
 #define NS      "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg"
 #define NS_BGP  "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg-bgp"
+#define NS_SYS  "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg-system"
 #define NC_NS   "urn:ietf:params:xml:ns:netconf:base:1.0"
 #define HELPER  "/usr/local/libexec/clixon-vppcfg/clixon-vppcfg"
 #define VPPCTL  "/usr/bin/vppctl"
@@ -1176,6 +1177,15 @@ vc_edit(clixon_handle h,
         cvec         *argv)
 {
     return tpl_edit(h, cvv, arg_str(argv, 0), NS_BGP) < 0 ? -1 : 0;
+}
+
+/* Device setting (vppcfg-system.yang): argv = (template) */
+int
+vc_sys_edit(clixon_handle h,
+            cvec         *cvv,
+            cvec         *argv)
+{
+    return tpl_edit(h, cvv, arg_str(argv, 0), NS_SYS) < 0 ? -1 : 0;
 }
 
 /* AS-path list entry: argv = (template). Like vc_edit, after the helper has checked the pattern ($re

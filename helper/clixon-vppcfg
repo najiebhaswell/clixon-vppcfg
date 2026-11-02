@@ -1,15 +1,16 @@
 #!/usr/bin/python3 -I
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Najieb Haswell
-"""clixon-vppcfg: bridge between the Clixon datastore (XML, vppcfg.yang and vppcfg-bgp.yang models),
-vppcfg and BIRD.
+"""clixon-vppcfg: bridge between the Clixon datastore (XML, vppcfg.yang, vppcfg-bgp.yang and
+vppcfg-system.yang models), vppcfg and BIRD.
 
 Called by the backend plugin (validate/apply) and the CLI plugin (show-config/diff/ip-brief).
 
   clixon-vppcfg validate <cfg.xml>       vppcfg check + plan against the running VPP, BGP checks and
                                          'bird -p' on the rendered BIRD configuration; errors to stderr
   clixon-vppcfg apply <cfg.xml>          write /etc/vpp/vppcfg.yaml, vppcfg apply, regenerate the boot file;
-                                         write /etc/bird/bird-clixon.conf and 'birdc configure' if it changed
+                                         write /etc/bird/bird-clixon.conf and 'birdc configure' if it changed;
+                                         set the hostname if it is configured
   clixon-vppcfg render-bird <cfg.xml>    print the rendered BIRD configuration (debugging)
   clixon-vppcfg bgp-neighbor <peer>      'birdc show protocols all' for a neighbor address or protocol name
   clixon-vppcfg bgp-summary [--style cisco|vrp] [ipv4|ipv6]
@@ -29,6 +30,9 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
                                          run vppctl; with vrp, show Eth-TrunkN/LoopBackN names
   clixon-vppcfg ip-brief [--style cisco|vrp]
                                          summary of VPP interfaces and their addresses
+  clixon-vppcfg banner [--style cisco|vrp]
+                                         logo (/etc/clixon-vppcfg/banner if present) and status lines
+                                         printed by rtr/vrp when an interactive session starts
 """
 import difflib
 import grp
@@ -36,6 +40,7 @@ import ipaddress
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -60,6 +65,19 @@ BIRDC = "/usr/sbin/birdc"
 BIRD_CONF = "/etc/bird/bird.conf"
 BIRD_GEN = "/etc/bird/bird-clixon.conf"
 BIRD_INCLUDE = f'include "{BIRD_GEN}";'
+
+SYS_NS = "urn:clixon-vppcfg:params:xml:ns:yang:vppcfg-system"
+HOSTNAMECTL = "/usr/bin/hostnamectl"
+HOSTS = "/etc/hosts"
+BANNER_FILE = "/etc/clixon-vppcfg/banner"
+LOGO_VPP = r"""   _   _____  ___
+  | | / / _ \/ _ \
+  | |/ / ___/ ___/
+  |___/_/  /_/""".splitlines()
+LOGO_BIRD = r"""   ___  _______  ___
+  / _ )/  _/ _ \/ _ \
+ / _  |/ // , _/ // /
+/____/___/_/|_/____/""".splitlines()
 
 INT_LEAVES = {"mtu", "dot1q", "dot1ad", "inner-dot1q"}
 BOOL_LEAVES = {"mpls", "sflow", "exact-match"}
@@ -350,6 +368,70 @@ def cmd_apply(xml_path):
     err = bird_apply(render_bird(bgp))
     if err:
         die("Failed to apply to BIRD:\n" + err)
+    err = hostname_apply(xml_to_system(xml_path).get("hostname"))
+    if err:
+        die("Failed to set the hostname:\n" + err)
+
+
+# ---------------------------------------------------------------------------
+# Device settings (vppcfg-system.yang)
+# ---------------------------------------------------------------------------
+
+def xml_to_system(path):
+    for el in ET.parse(path).getroot().iter(f"{{{SYS_NS}}}system"):
+        return {local(c.tag): (c.text or "").strip() for c in el}
+    return {}
+
+
+def hostname_apply(name):
+    """Set the hostname and the 127.0.1.1 line of /etc/hosts; None if OK. No name: leave them alone."""
+    old = socket.gethostname()
+    if not name or name == old:
+        return None
+    r = subprocess.run([HOSTNAMECTL, "set-hostname", name], capture_output=True, text=True)
+    if r.returncode != 0:
+        return (r.stderr + r.stdout).strip() or "hostnamectl failed"
+    lines, found = [], False
+    for line in open(HOSTS).read().splitlines():
+        f = line.split()
+        if f and f[0] == "127.0.1.1":
+            names = [name if n == old else n for n in f[1:]]
+            line = "\t".join(["127.0.1.1"] + (names if name in names else names + [name]))
+            found = True
+        lines.append(line)
+    if not found:
+        lines.append(f"127.0.1.1\t{name}")
+    write_atomic(HOSTS, "\n".join(lines) + "\n")
+    # snmpd reads sysName when it starts. Restart, not reload: it runs as Debian-snmp and a reload
+    # cannot read the root-only snmpd.conf, which drops its access rules until the next start.
+    subprocess.run(["systemctl", "try-restart", "snmpd"], capture_output=True)
+    return None
+
+
+def tool_version(cmd, pattern):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(pattern, r.stdout + r.stderr) if r.returncode == 0 else None
+    return m.group(1) if m else None
+
+
+def cmd_banner(style):
+    try:
+        print(open(BANNER_FILE).read().rstrip("\n"))
+    except OSError:
+        color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+        vpp, bird, off = ("\033[1;31m", "\033[1;32m", "\033[0m") if color else ("", "", "")
+        for a, b in zip(LOGO_VPP, LOGO_BIRD):
+            print(f"{vpp}{a:<20}{off}   {bird}{b}{off}")
+    versions = [("VPP", tool_version([VPPCTL, "show", "version"], r"vpp v(\d+\.\d+\.\d+)")),
+                ("BIRD", tool_version([BIRD, "--version"], r"version (\S+)")),
+                ("clixon-vppcfg", tool_version(["dpkg-query", "-W", "-f", "${Version}", "clixon-vppcfg"], r"(\S+)"))]
+    print()
+    print("  " + " | ".join([socket.gethostname()] + [f"{n} {v or 'n/a'}" for n, v in versions]))
+    print(f"  {'Huawei VRP' if style == 'vrp' else 'Cisco'} style CLI. Type ? for help.")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -1336,8 +1418,9 @@ def vrp_bgp_lines(r, section=None):
     return out
 
 
-def render_lines(cfg, style, only=None, bgp=None):
+def render_lines(cfg, style, only=None, bgp=None, system=None):
     bgp = bgp or {}
+    host = (system or {}).get("hostname")
     if style == "vrp":
         if only in ("bgp",) or (only or "").startswith("route-policy:"):
             lines = vrp_bgp_lines(bgp, only)
@@ -1345,12 +1428,14 @@ def render_lines(cfg, style, only=None, bgp=None):
         lines = vrp_lines(cfg, only)
         if only is None:
             lines = lines[:-2] + vrp_bgp_lines(bgp) + ["#", "return"]
+            if host:
+                lines = ["#", f"sysname {host}"] + lines
         return lines
     if only == "bgp" or (only or "").startswith("route-policy:"):
         return cisco_bgp_lines(bgp)
     lines = cisco_lines(cfg)
     if only is None:
-        return lines + cisco_bgp_lines(bgp)
+        return ([f"hostname {host}", "!"] if host else []) + lines + cisco_bgp_lines(bgp)
     # Cisco: keep the block of one interface
     out, keep = [], False
     for line in lines:
@@ -1362,14 +1447,14 @@ def render_lines(cfg, style, only=None, bgp=None):
 
 
 def cmd_show_config(xml_path, style="cisco", only=None):
-    lines = render_lines(xml_to_cfg(xml_path), style, only, xml_to_bgp(xml_path))
+    lines = render_lines(xml_to_cfg(xml_path), style, only, xml_to_bgp(xml_path), xml_to_system(xml_path))
     empty = "# (no configuration)" if style == "vrp" else "! (no configuration)"
     print("\n".join(lines) if lines else empty)
 
 
 def cmd_diff(a_path, b_path, style="cisco"):
-    a = render_lines(xml_to_cfg(a_path), style, None, xml_to_bgp(a_path))
-    b = render_lines(xml_to_cfg(b_path), style, None, xml_to_bgp(b_path))
+    a = render_lines(xml_to_cfg(a_path), style, None, xml_to_bgp(a_path), xml_to_system(a_path))
+    b = render_lines(xml_to_cfg(b_path), style, None, xml_to_bgp(b_path), xml_to_system(b_path))
     diff = list(difflib.unified_diff(a, b, "running", "candidate", lineterm="", n=2))
     none = "Info: No uncommitted configuration." if style == "vrp" else "% No uncommitted changes."
     print("\n".join(diff[2:]) if diff else none)
@@ -1377,7 +1462,8 @@ def cmd_diff(a_path, b_path, style="cisco"):
 
 def cmd_changed(a_path, b_path):
     """Exit 1 if configurations a and b differ, 0 if identical."""
-    same = xml_to_cfg(a_path) == xml_to_cfg(b_path) and xml_to_bgp(a_path) == xml_to_bgp(b_path)
+    same = (xml_to_cfg(a_path) == xml_to_cfg(b_path) and xml_to_bgp(a_path) == xml_to_bgp(b_path) and
+            xml_to_system(a_path) == xml_to_system(b_path))
     sys.exit(0 if same else 1)
 
 
@@ -1478,6 +1564,8 @@ def main():
         cmd_vppctl(args, style)
     elif verb == "ip-brief" and not args:
         cmd_ip_brief(style)
+    elif verb == "banner" and not args:
+        cmd_banner(style)
     else:
         die(__doc__, 2)
 
