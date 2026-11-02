@@ -16,6 +16,9 @@ Called by the backend plugin (validate/apply) and the CLI plugin (show-config/di
   clixon-vppcfg bgp-summary [--style cisco|vrp] [ipv4|ipv6]
                                          BGP peers per address family (show bgp all summary /
                                          display bgp all summary), from 'birdc show protocols all'
+  clixon-vppcfg memory                   memory of the system, VPP and BIRD
+  clixon-vppcfg route-list ip|ipv6|bgp [--style cisco|vrp]
+                                         number of best routes in BIRD and the first ones, never a full table
   clixon-vppcfg rpki-session [address] [--style cisco|vrp]
                                          RPKI cache servers: state, serial and ROAs, or details of one
   clixon-vppcfg rpki-table statistics|<prefix> [--style cisco|vrp]
@@ -133,6 +136,14 @@ def leaf_value(name, text):
     return text
 
 
+def canon_address(a):
+    """Address in the form VPP shows: vppcfg would remove and add again one written in any other form."""
+    try:
+        return str(ipaddress.ip_interface(a))
+    except ValueError:
+        return a
+
+
 def element_to_dict(el, order, leaflist_map, nested=None):
     """Convert one XML list entry to a vppcfg dict. leaflist_map: XML leaf-list name -> YAML key."""
     d = {}
@@ -141,7 +152,7 @@ def element_to_dict(el, order, leaflist_map, nested=None):
         if n in ("name", "id"):
             continue
         if n in leaflist_map:
-            d.setdefault(leaflist_map[n], []).append((child.text or "").strip())
+            d.setdefault(leaflist_map[n], []).append(canon_address((child.text or "").strip()))
         elif nested and n in nested:
             nested[n](child, d)
         else:
@@ -1282,10 +1293,10 @@ def vrp_lines(cfg, only=None):
                 out.append(f" qinq termination pe-vid {outer} ce-vid {e['inner-dot1q']}"
                            + (" dot1ad" if "dot1ad" in e else ""))
             elif e:
-                if e.get("exact-match"):
-                    out.append(f" {'dot1ad' if 'dot1ad' in e else 'dot1q'} termination vid {outer}")
+                if "dot1ad" in e:
+                    out.append(f" dot1ad termination vid {outer}" if e.get("exact-match") else f" vlan-type dot1ad {outer}")
                 else:
-                    out.append(f" vlan-type {'dot1ad' if 'dot1ad' in e else 'dot1q'} {outer}")
+                    out.append(f" vlan-type dot1q {outer}" + ("" if e.get("exact-match") else " non-exact"))
             l3({k: v for k, v in sub.items() if k != "description"})
     for name, body in cfg.get("loopbacks", {}).items():
         if only not in (None, name):
@@ -1675,6 +1686,76 @@ def cmd_show_list(xml_path, kind, style="cisco", name=None):
         print("\n".join(out[:-1]))
 
 
+def cmd_memory():
+    info = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            key, val = line.split(":", 1)
+            info[key] = int(val.split()[0])
+    total, avail = info["MemTotal"] // 1024, info["MemAvailable"] // 1024
+    print(f"System:    {total} MB total, {total - avail} MB used, {avail} MB available")
+    size = info["Hugepagesize"] // 1024
+    print(f"Hugepages: {info['HugePages_Total']} x {size} MB, {info['HugePages_Free']} free")
+    print(f"\n{'Component':<20} {'Total':<12} {'Used':<12} Free")
+    for name, segment in (("VPP main heap", "main-heap"), ("VPP stats segment", "stats-segment"),
+                          ("VPP API segment", "api-segment")):
+        r = subprocess.run([VPPCTL, "show", "memory", segment], capture_output=True, text=True)
+        m = re.search(r"total: ([^,]+), used: ([^,]+), free: ([^,]+)", r.stdout)
+        print(f"{name:<20} {m.group(1):<12} {m.group(2):<12} {m.group(3)}" if m else f"{name:<20} not available")
+    text = birdc("show", "memory")
+    tables = re.search(r"Routing tables:\s+(\S+ \S+)", text)
+    used = re.search(r"Total:\s+(\S+ \S+)\s+(\S+ \S+)", text)
+    if used:
+        print(f"\nBIRD:      {used.group(1)} used, {used.group(2)} overhead"
+              + (f", routing tables {tables.group(1)}" if tables else ""))
+    else:
+        print("\nBIRD:      not available")
+
+
+ROUTE_LIMIT = 100
+ROUTE_LINE = re.compile(r"(\S+/\d+)\s+(\S+)\s+\[(\S+) [^\]]*\]\s*\*?\s*\([^)]*\)?\s*(?:\[(?:AS)?([^\]]*)\])?")
+
+
+def bird_routes(table, where=""):
+    """Number of best routes of a BIRD table and the first ROUTE_LIMIT: birdc is stopped there, so a full
+    table is never fetched. (vppctl show ip fib cannot be stopped: VPP builds the whole output first.)"""
+    cmd = f"show route table {table} primary{where}"
+    m = re.search(r"(\d+) of \d+ routes", birdc(cmd + " count"))
+    routes = []
+    proc = subprocess.Popen([BIRDC, cmd], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    for line in proc.stdout:
+        h = ROUTE_LINE.match(line)
+        if h:
+            if len(routes) == ROUTE_LIMIT:
+                break
+            routes.append({"net": h.group(1), "type": h.group(2), "proto": h.group(3), "origin": h.group(4) or "",
+                           "via": []})
+        elif routes:
+            v = re.match(r"\s+(?:via (\S+) on (\S+)|dev (\S+))", line)
+            if v:
+                routes[-1]["via"].append((v.group(1) or "connected", v.group(2) or v.group(3)))
+    proc.terminate()
+    proc.stdout.close()
+    proc.wait()
+    return int(m.group(1)) if m else 0, routes
+
+
+def cmd_route_list(kind, style="cisco"):
+    tables = [("IPv4", "master4"), ("IPv6", "master6")]
+    if kind != "bgp":
+        tables = [tables[0] if kind == "ip" else tables[1]]
+    for name, table in tables:
+        total, routes = bird_routes(table, " where source = RTS_BGP" if kind == "bgp" else "")
+        print(f"{name} routes in BIRD: {total}" + (f", the first {len(routes)} are shown" if total > len(routes) else ""))
+        if not routes:
+            continue
+        print(f"{'Destination':<44} {'Protocol':<24} {'Next hop':<40} {'Interface':<16} Origin AS")
+        for r in routes:
+            gw, dev = r["via"][0] if r["via"] else (r["type"], "-")
+            gw += f" (+{len(r['via']) - 1})" if len(r["via"]) > 1 else ""
+            print(f"{r['net']:<44} {r['proto']:<24} {gw:<40} {dev:<16} {r['origin']}".rstrip())
+
+
 def cmd_show_static(xml_path, ver, style="cisco"):
     routes = static_routes(xml_to_bgp(xml_path), ver)
     if not routes:
@@ -1889,6 +1970,10 @@ def main():
         cmd_bgp_summary(style, args or ["ipv4", "ipv6"])
     elif verb == "bgp-neighbor" and len(args) == 1:
         cmd_bgp_neighbor(args[0])
+    elif verb == "memory" and not args:
+        cmd_memory()
+    elif verb == "route-list" and len(args) == 1 and args[0] in ("ip", "ipv6", "bgp"):
+        cmd_route_list(args[0], style)
     elif verb == "rpki-session" and len(args) <= 1:
         cmd_rpki_session(style, *args)
     elif verb == "rpki-table" and len(args) == 1:

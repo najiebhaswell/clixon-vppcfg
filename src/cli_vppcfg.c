@@ -153,13 +153,19 @@ vrp_ifname(const char *in,
         snprintf(out, len, "%s", in);
 }
 
-/*! Replace *val by its VPP name when the leaf holds an interface name. */
+/*! Replace *val by its VPP name when the leaf holds an interface name; addresses are kept in lower case. */
 static void
 canon_leaf_value(const char *leaf,
                  char      **val)
 {
     char buf[128];
+    char *p;
 
+    if (strcmp(leaf, "address") == 0) {
+        for (p = *val; *p; p++)
+            *p = tolower((unsigned char)*p);
+        return;
+    }
     if (strcmp(leaf, "unnumbered") != 0 && strcmp(leaf, "l2xc") != 0 && strcmp(leaf, "interface") != 0)
         return;
     canon_ifname(*val, buf, sizeof(buf));

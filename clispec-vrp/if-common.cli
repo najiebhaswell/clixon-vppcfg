@@ -16,6 +16,7 @@ ipv6("IPv6 configuration") {
         <addr:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("IPv6 address/prefix length, e.g. 2001:db8::1/64"), vc_add_ll("address", "addr");
     }
 }
+statistic("Interface statistics") enable("Accepted for compatibility; VPP always counts"), vc_noop();
 lcp("Create a Linux TAP (linux-cp) in the dataplane netns so Linux and BIRD can use this interface") <name:string regexp:"[a-z][a-z0-9.-]{0,14}">("Linux interface name, max. 15 characters; sub-interface: <parent lcp>.<number>"), vc_set_leaf("lcp", "name");
 mpls("Enable MPLS forwarding on this interface"), vc_set_leaf("mpls", "=true");
 undo("Undo a command") {
@@ -29,6 +30,7 @@ undo("Undo a command") {
         <ip6:ipv6addr>("IPv6 address") <len6:uint8 range[1:128]>("Prefix length"), vc_addr("del");
         <addr:string regexp:"[0-9a-fA-F:.]+/[0-9]+">("IPv6 address/prefix length"), vc_del_ll("address", "addr");
     }
+    statistic("Interface statistics") enable("Accepted for compatibility"), vc_noop();
     lcp("Remove the Linux TAP (linux-cp) of this interface"), vc_del_leaf("lcp");
     mpls("Disable MPLS forwarding"), vc_del_leaf("mpls");
 }

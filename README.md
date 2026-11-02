@@ -358,17 +358,26 @@ $ vrp
   (roll back a trial commit now), `clear configuration candidate` (discard and stay).
 - `ip address A.B.C.D <mask|length> [sub]`, `ip address unnumbered interface LoopBack0`,
   `ipv6 enable` (accepted, no-op), `ipv6 address X:X::X <length>`.
-- Sub-interfaces: `dot1q termination vid <n>`, `qinq termination pe-vid <n> ce-vid <n>` (both exact
-  match), `vlan-type dot1q <n>` (without exact match).
+- Sub-interfaces: `vlan-type dot1q <n>` (exact match, as on VRP; `dot1q termination vid <n>` means the
+  same), `qinq termination pe-vid <n> ce-vid <n>`, and `vlan-type dot1q <n> non-exact` for the VPP match
+  that also takes frames with more tags (not allowed with `lcp`).
+- `interface` also works inside an interface view, so a configuration pasted from VRP moves to the next
+  interface without `quit`. `statistic enable` is accepted and ignored: VPP always counts. So are
+  `encapsulation dot1q-termination|qinq-termination`, `control-vid <n> [...]` and `arp broadcast enable`
+  in a sub-interface: the tags follow from `vlan-type` or `qinq termination`, and Linux handles ARP. None
+  of them is shown in the configuration. `ce-vid <a> to <b>` ranges are not supported.
 - Eth-Trunk: `mode lacp-static | manual load-balance`, `load-balance src-dst-mac | src-dst-ip |
   src-dst-ip-port`, `trunkport <port>`, or `eth-trunk <n>` in the member port's view.
 - `display current-configuration`, `display configuration candidate [changes]`, `display this`,
   `display interface [name]`, `display ip interface brief`, `display ip routing-table statistics|<prefix>`,
   `display ip ip-prefix|ipv6-prefix|as-path-filter|community-filter|large-community-filter [name]`,
   `display rpki session|table|validation`, `display ip routing-table protocol static`,
+  `display memory [bird|vpp]` (`show memory [bird|vpp]`),
   `display ipv6 routing-table ...`, `display eth-trunk`, `display bgp peer [<name> verbose]`, `display version`.
-  `display ip routing-table` without arguments is not offered, because a full table would print a
-  million lines.
+  Without arguments `display ip routing-table`, `display ipv6 routing-table` and `display bgp routing-table`
+  (`show ip route`, `show ipv6 route`, `show ip bgp`) show the number of best routes in BIRD and the first
+  100, never a full table. They read BIRD, because `vppctl show ip fib` cannot be stopped halfway; with a
+  prefix `display ip routing-table` reads the VPP FIB.
 - Extensions without a Huawei equivalent keep VPP terms: `lcp`, `l2xc`, `sflow enable`, bond modes
   `active-backup`, `round-robin`, `broadcast`.
 
