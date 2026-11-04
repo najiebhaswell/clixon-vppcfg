@@ -351,6 +351,49 @@ def cmd_validate(xml_path):
         die("BIRD rejected the configuration:\n" + err)
 
 
+def boot_add_link_mtu(cfg):
+    """plan --novpp emits only 'mtu packet', so physical NICs boot with the driver's max frame size
+    (mlx5: 2026) and the first commit after every VPP restart shrinks it with a down/up of the port.
+    Set the link MTU in the boot file before the first interface comes up, as 'vppcfg apply' does."""
+    bonds = cfg.get("bondethernets", {})
+    phys = [(n, i.get("mtu", 1500)) for n, i in cfg.get("interfaces", {}).items()
+            if "." not in n and n not in bonds and i.get("device-type") != "rdma"]
+    if not phys:
+        return
+    lines = open(BOOT_PATH).read().splitlines(keepends=True)
+    at = next((k for k, l in enumerate(lines) if l.startswith("set interface state ")), len(lines))
+    lines[at:at] = ([f"comment {{ clixon-vppcfg: link MTU of {len(phys)} physical interface(s) }}\n"]
+                    + [f"set interface mtu {mtu} {n}\n" for n, mtu in phys])
+    write_atomic(BOOT_PATH, "".join(lines))
+
+
+def bond_mac_apply(cfg):
+    """vppcfg uses a bond's MAC only when it creates the bond, so a MAC set on an existing bond would
+    wait for the next VPP restart. With linux-cp sync on, a MAC set in VPP alone is overwritten from the
+    Linux side at the next link change: set it on the LCP device, linux-cp carries it to VPP."""
+    lcps = {}
+    r = subprocess.run([VPPCTL, "show", "lcp"], capture_output=True, text=True)
+    for m in re.finditer(r"^itf-pair: \[\d+\] (\S+) \S+ (\S+) \d+ type \S+(?: netns (\S+))?", r.stdout, re.M):
+        lcps[m.group(1)] = (m.group(2), m.group(3))
+    for name, b in cfg.get("bondethernets", {}).items():
+        mac = b.get("mac")
+        if not mac:
+            continue
+        r = subprocess.run([VPPCTL, "show", "hardware-interfaces", name], capture_output=True, text=True)
+        m = re.search(r"Ethernet address (\S+)", r.stdout)
+        if not m or m.group(1) == mac:
+            continue
+        if name in lcps:
+            host, netns = lcps[name]
+            cmd = ["ip"] + (["-n", netns] if netns else []) + ["link", "set", host, "address", mac]
+        else:
+            cmd = [VPPCTL, "set", "interface", "mac", "address", name, mac]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 or r.stdout.strip():
+            return f"{' '.join(cmd)}: {(r.stderr + r.stdout).strip()}"
+    return None
+
+
 def cmd_apply(xml_path):
     cfg = xml_to_cfg(xml_path)
     text = render_yaml(cfg)
@@ -365,9 +408,13 @@ def cmd_apply(xml_path):
         if old is not None:
             write_atomic(YAML_PATH, old)
         die("Failed to apply to VPP:\n" + err)
+    err = bond_mac_apply(cfg)
+    if err:
+        die("Applied to VPP, but failed to set the bond MAC address:\n" + err)
     r = vppcfg("plan", "--novpp", "-c", YAML_PATH, "-o", BOOT_PATH)
     if r.returncode != 0:
         die("Applied to VPP, but failed to write the boot file " + BOOT_PATH + ":\n" + clean_errors(r.stderr))
+    boot_add_link_mtu(cfg)
     # plan --novpp does not tag physical interfaces (it creates nothing for them); without the tags
     # 'vppcfg plan' is not empty after every VPP restart
     phys = [n for n in cfg.get("interfaces", {}) if "." not in n]
@@ -1182,6 +1229,8 @@ def cisco_lines(cfg):
         if b is not None:
             if "description" in b and "description" not in ifs.get(name, {}):
                 out.append(f" description {b['description']}")
+            if "mac" in b:
+                out.append(f" mac-address {b['mac']}")
             if "mode" in b:
                 out.append(f" mode {b['mode']}")
             if "load-balance" in b:
@@ -1277,6 +1326,8 @@ def vrp_lines(cfg, only=None):
                     out.append(f" mode {VRP_MODE[b['mode']]}")
                 if "load-balance" in b:
                     out.append(f" load-balance {VRP_LB[b['load-balance']]}")
+                if "mac" in b:
+                    out.append(f" mac-address {b['mac']}")
             if name in member_of:
                 out.append(f" eth-trunk {member_of[name][len('BondEthernet'):]}")
             l3({k: v for k, v in body.items() if k != "description"})
